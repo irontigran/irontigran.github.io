@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Removing Printf Code from a Rust Program</title>
+        <link rel="stylesheet" href="../css/default.css" />
+        <link rel="stylesheet" href="../css/syntax.css" />
+    </head>
+    <body>
+    <nav>
+        <a href="../index.html"><img src="../images/change-ring.png" id="logo" width="275px"></a>
+        
+            <hr />
+            <div id="toc">
+            <ul>
+<li><a href="#context-a-really-tiny-rust-program" id="toc-context-a-really-tiny-rust-program">Context: a really tiny Rust program</a></li>
+<li><a href="#why-does-openpty-require-printf" id="toc-why-does-openpty-require-printf">Why does <code>openpty</code> require <code>printf</code>?</a></li>
+<li><a href="#how-do-we-get-a-pseudoterminal-without-printf" id="toc-how-do-we-get-a-pseudoterminal-without-printf">How do we get a pseudoterminal without <code>printf</code>?</a></li>
+<li><a href="#resources" id="toc-resources">Resources</a></li>
+<li><a href="#appendix" id="toc-appendix">Appendix</a></li>
+</ul>
+            </div>
+        
+    </nav>
+
+        <main role="main">
+            <h1>Removing Printf Code from a Rust Program</h1>
+            <article>
+    <section class="header">
+        Posted on September  2, 2022
+        
+        <hr />
+    </section>
+    <section>
+        <p>In which I try to remove all traces of printf from a Rust program.</p>
+<h1 id="context-a-really-tiny-rust-program">Context: a really tiny Rust program</h1>
+<p>Recently, I was working on a Rust program meant to run in a severely
+constrained environment; for example, the binary size on disk absolutely <em>had</em>
+to be under 1 MB, and we were aiming to have it come in around 100 KB. To that
+end, we had a couple rules for our program:</p>
+<ul>
+<li><p>No use of heap allocations</p></li>
+<li><p><strong>No use of printf-style formatting code</strong></p></li>
+</ul>
+<p>We made extensive use of the <a href="https://docs.rs/libc/latest/libc/">libc Rust
+crate</a>. The general style was that
+Rust, with its safety checks, took care of the “business logic” of the
+program, and we used libc calls to ensure our interactions with the OS
+don’t have any unexpected effects (like heap allocations or printf
+formatting).</p>
+<p>So imagine my surprise when adding code to create pseudoterminals caused
+the binary to suddenly balloon in size. (By “balloon” I mean “increased
+by an unexpected ~10KB”.)</p>
+<div class="sourceCode" id="cb1"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="at">#![</span>cfg_attr<span class="at">(</span>not<span class="at">(</span>test<span class="at">)</span><span class="op">,</span> no_main<span class="at">)]</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="kw">extern</span> <span class="kw">crate</span> libc<span class="op">;</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::ffi::</span><span class="dt">c_int</span><span class="op">;</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="kw">use</span> <span class="pp">std::</span>ptr<span class="op">;</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg_attr<span class="at">(</span>not<span class="at">(</span>test<span class="at">)</span><span class="op">,</span> no_mangle<span class="at">)]</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> main() <span class="op">{</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> master<span class="op">:</span> <span class="dt">c_int</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> slave<span class="op">:</span> <span class="dt">c_int</span> <span class="op">=</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="dv">0</span> <span class="op">&gt;</span> <span class="kw">unsafe</span> <span class="op">{</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a>        <span class="pp">libc::</span>openpty(</span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span><span class="kw">mut</span> master<span class="op">,</span></span>
+<span id="cb1-14"><a href="#cb1-14" aria-hidden="true" tabindex="-1"></a>            <span class="op">&amp;</span><span class="kw">mut</span> slave<span class="op">,</span></span>
+<span id="cb1-15"><a href="#cb1-15" aria-hidden="true" tabindex="-1"></a>            <span class="pp">ptr::</span>null_mut()<span class="op">,</span></span>
+<span id="cb1-16"><a href="#cb1-16" aria-hidden="true" tabindex="-1"></a>            <span class="pp">ptr::</span>null()<span class="op">,</span></span>
+<span id="cb1-17"><a href="#cb1-17" aria-hidden="true" tabindex="-1"></a>            <span class="pp">ptr::</span>null()<span class="op">,</span></span>
+<span id="cb1-18"><a href="#cb1-18" aria-hidden="true" tabindex="-1"></a>        )</span>
+<span id="cb1-19"><a href="#cb1-19" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb1-20"><a href="#cb1-20" aria-hidden="true" tabindex="-1"></a>        <span class="pp">panic!</span>(<span class="st">&quot;openpty&quot;</span>)<span class="op">;</span></span>
+<span id="cb1-21"><a href="#cb1-21" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb1-22"><a href="#cb1-22" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>fork() <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb1-23"><a href="#cb1-23" aria-hidden="true" tabindex="-1"></a>        <span class="op">-</span><span class="dv">1</span> <span class="op">=&gt;</span> <span class="pp">panic!</span>(<span class="st">&quot;fork&quot;</span>)<span class="op">,</span></span>
+<span id="cb1-24"><a href="#cb1-24" aria-hidden="true" tabindex="-1"></a>        <span class="dv">0</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb1-25"><a href="#cb1-25" aria-hidden="true" tabindex="-1"></a>            <span class="cf">for</span> fd <span class="kw">in</span> <span class="dv">0i32</span><span class="op">..</span><span class="dv">3</span> <span class="op">{</span></span>
+<span id="cb1-26"><a href="#cb1-26" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="dv">0</span> <span class="op">&gt;</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>dup2(slave<span class="op">,</span> fd) <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb1-27"><a href="#cb1-27" aria-hidden="true" tabindex="-1"></a>                    <span class="pp">panic!</span>(<span class="st">&quot;dup2&quot;</span>)<span class="op">;</span></span>
+<span id="cb1-28"><a href="#cb1-28" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb1-29"><a href="#cb1-29" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb1-30"><a href="#cb1-30" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Child execs a shell (or other program) that can be &quot;driven&quot; by</span></span>
+<span id="cb1-31"><a href="#cb1-31" aria-hidden="true" tabindex="-1"></a>            <span class="co">// the parent program.</span></span>
+<span id="cb1-32"><a href="#cb1-32" aria-hidden="true" tabindex="-1"></a>            <span class="co">// unsafe { libc::execl(b&quot;/bin/sh\0&quot;.as_ptr() as *const c_char, ptr::null()) };</span></span>
+<span id="cb1-33"><a href="#cb1-33" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb1-34"><a href="#cb1-34" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb1-35"><a href="#cb1-35" aria-hidden="true" tabindex="-1"></a>            <span class="co">// parent communicates with child through the master side of the pty</span></span>
+<span id="cb1-36"><a href="#cb1-36" aria-hidden="true" tabindex="-1"></a>            <span class="co">// read/write calls here (from stdin/stdout or a socket or whatnot)</span></span>
+<span id="cb1-37"><a href="#cb1-37" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb1-38"><a href="#cb1-38" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p><code>cargo bloat</code> is a handy tool that will tell you what exactly is taking
+up all that space. Using it to compile and analyze the above
+snippet<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>, I get this output:</p>
+<pre><code>     File  .text    Size     Crate Name
+     4.1%  22.8%  2.9KiB [Unknown] fmt_fp
+     3.4%  18.6%  2.3KiB [Unknown] printf_core
+     0.6%   3.1%    403B [Unknown] vfprintf
+     0.6%   3.0%    391B [Unknown] static_init_tls
+     0.5%   3.0%    385B [Unknown] __init_libc
+     0.5%   2.9%    366B [Unknown] pop_arg
+     0.5%   2.7%    346B [Unknown] _start_c
+     0.4%   2.3%    300B [Unknown] openpty
+     0.4%   2.1%    268B [Unknown] wcrtomb
+     0.3%   1.9%    238B [Unknown] __strchrnul
+     0.3%   1.7%    221B [Unknown] __stdio_write
+     0.3%   1.5%    196B [Unknown] memchr
+     0.3%   1.4%    178B [Unknown] __lockfile
+     0.2%   1.4%    175B [Unknown] __fwritex
+     0.2%   1.3%    168B [Unknown] vsnprintf
+     0.2%   1.3%    162B [Unknown] __lock
+     0.2%   1.2%    150B [Unknown] fork
+     0.2%   1.2%    148B [Unknown] pad
+     0.2%   1.1%    143B [Unknown] fprintf
+     0.2%   1.1%    140B [Unknown] sn_write
+     3.9%  21.6%  2.7KiB           And 55 smaller methods. Use -n N to show more.
+    18.1% 100.0% 12.5KiB           .text section size, the file size is 69.1KiB</code></pre>
+<p>Almost 10% of the total file size is taken up by formatting code (<code>fmt_fp</code>,
+<code>printf_core</code>, and <code>vfprintf</code>). And this is a do-nothing program! In the real
+code, it used more space. When you’re aiming for &lt;100KB program, even 5–10KB
+is a noticeable percentage.</p>
+<h1 id="why-does-openpty-require-printf">Why does <code>openpty</code> require <code>printf</code>?</h1>
+<p>After some experimentation,<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a> I realized that the culprit was the <code>openpty</code>
+call. But experimentation doesn’t tell us why. Nor does the
+<a href="https://www.man7.org/linux/man-pages/man3/openpty.3.html">manpage</a> give us any
+hint—the only reference to string manipulation is:</p>
+<blockquote>
+<p>if <em>name</em> is not NULL, the filename of the slave is returned in
+<em>name</em>.</p>
+</blockquote>
+<p>But our program does set <code>name</code> to be NULL. So what gives?</p>
+<p>In the end, I had to check musl’s <a href="https://git.musl-libc.org/cgit/musl/tree/src/misc/openpty.c">source
+code</a> for
+<code>openpty</code> to solve the mystery.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode c"><code class="sourceCode c"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">int</span> openpty<span class="op">(</span><span class="dt">int</span> <span class="op">*</span>pm<span class="op">,</span> <span class="dt">int</span> <span class="op">*</span>ps<span class="op">,</span> <span class="dt">char</span> <span class="op">*</span>name<span class="op">,</span> <span class="dt">const</span> <span class="kw">struct</span> termios <span class="op">*</span>tio<span class="op">,</span> <span class="dt">const</span> <span class="kw">struct</span> winsize <span class="op">*</span>ws<span class="op">)</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="op">{</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* variable declarations... */</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a>	m <span class="op">=</span> open<span class="op">(</span><span class="st">&quot;/dev/ptmx&quot;</span><span class="op">,</span> O_RDWR<span class="op">|</span>O_NOCTTY<span class="op">);</span></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>m <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span> <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a>	pthread_setcancelstate<span class="op">(</span>PTHREAD_CANCEL_DISABLE<span class="op">,</span> <span class="op">&amp;</span>cs<span class="op">);</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(</span>ioctl<span class="op">(</span>m<span class="op">,</span> TIOCSPTLCK<span class="op">,</span> <span class="op">&amp;</span>n<span class="op">)</span> <span class="op">||</span> ioctl <span class="op">(</span>m<span class="op">,</span> TIOCGPTN<span class="op">,</span> <span class="op">&amp;</span>n<span class="op">))</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> fail<span class="op">;</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">(!</span>name<span class="op">)</span> name <span class="op">=</span> buf<span class="op">;</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a>	snprintf<span class="op">(</span>name<span class="op">,</span> <span class="kw">sizeof</span> buf<span class="op">,</span> <span class="st">&quot;/dev/pts/</span><span class="sc">%d</span><span class="st">&quot;</span><span class="op">,</span> n<span class="op">);</span></span>
+<span id="cb4-14"><a href="#cb4-14" aria-hidden="true" tabindex="-1"></a>	<span class="cf">if</span> <span class="op">((</span>s <span class="op">=</span> open<span class="op">(</span>name<span class="op">,</span> O_RDWR<span class="op">|</span>O_NOCTTY<span class="op">))</span> <span class="op">&lt;</span> <span class="dv">0</span><span class="op">)</span></span>
+<span id="cb4-15"><a href="#cb4-15" aria-hidden="true" tabindex="-1"></a>		<span class="cf">goto</span> fail<span class="op">;</span></span>
+<span id="cb4-16"><a href="#cb4-16" aria-hidden="true" tabindex="-1"></a>    <span class="co">/* code snipped */</span></span>
+<span id="cb4-17"><a href="#cb4-17" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
+<p>And you can see the <code>snprintf</code> call as plain as day. It turns out that
+even if the caller doesn’t request the slave filename, <code>openpty</code> still
+needs to figure out the filename to open the file and return the file
+descriptor. Makes perfect sense once you think about it.</p>
+<h1 id="how-do-we-get-a-pseudoterminal-without-printf">How do we get a pseudoterminal without <code>printf</code>?</h1>
+<p>An experienced reader may note that <code>openpty</code> is not the POSIX standard
+for opening a pseudoterminal. The POSIX standard specifies
+<code>posix_openpt</code>, <code>grantpt</code>, <code>unlockpt</code>, <code>ptsname</code>, and finally calling
+<code>open</code> on the slave filename. (You can see why <code>openpty</code> is more
+popular, despite being non-standard.) Unfortunately, using the POSIX
+standard functions doesn’t save us—
+<a href="https://git.musl-libc.org/cgit/musl/tree/src/misc/pty.c"><code>ptsname</code></a><a href="#fn3" class="footnote-ref" id="fnref3" role="doc-noteref"><sup>3</sup></a>
+uses <code>snprintf</code> to return the filename in almost the exact same manner
+as <code>openpty</code> does.</p>
+<p>Unfortunately, we’re going to have to reimplement some libc
+functionality to get around the formatting call. We have a couple
+options:</p>
+<ol type="1">
+<li><p>Keep using <code>openpty</code>, but write our own <code>openpty</code> function, being
+careful to not use any formatting functions.</p></li>
+<li><p>Use the POSIX standard functions, but write our own <code>ptsname</code>
+function, being careful to not use any formatting functions.</p></li>
+<li><p>Write our own <code>snprintf</code> function, and make sure that it overrides
+the libc version. This can work because our version of <code>snprintf</code>
+would only handle integer conversion—formatting code is bloated
+because it has to handle floating point, hex, padding, pointers,
+etc.</p></li>
+</ol>
+<p>Any of these will work. I chose the second option because it 1) limits
+the amount of code I have to write (<code>ptsname_r</code> is a smaller function
+than <code>openpty</code>) and 2) it doesn’t rely on redefining a libc function.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> no_printf_ptsname_r(fd<span class="op">:</span> <span class="dt">c_int</span><span class="op">,</span> buf<span class="op">:</span> <span class="op">*</span><span class="kw">mut</span> <span class="dt">c_char</span><span class="op">,</span> buflen<span class="op">:</span> <span class="pp">libc::</span><span class="dt">size_t</span>) <span class="op">-&gt;</span> <span class="dt">c_int</span> <span class="op">{</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>    <span class="co">// The ioctl call gives us the pseudoterminal number, but then we need</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>    <span class="co">// to convert the number to text _without_ using formatting calls.</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> ptsnum<span class="op">:</span> <span class="dt">c_int</span> <span class="op">=</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">MaybeUninit::</span>zeroed()<span class="op">.</span>assume_init() <span class="op">};</span></span>
+<span id="cb5-5"><a href="#cb5-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="dv">0</span> <span class="op">!=</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>ioctl(fd<span class="op">,</span> <span class="pp">libc::</span>TIOCGPTN<span class="op">,</span> <span class="op">&amp;</span>ptsnum) <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb5-6"><a href="#cb5-6" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-7"><a href="#cb5-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-8"><a href="#cb5-8" aria-hidden="true" tabindex="-1"></a>    <span class="co">// This block of code is roughly equivalent to a very limited itoa() call.</span></span>
+<span id="cb5-9"><a href="#cb5-9" aria-hidden="true" tabindex="-1"></a>    <span class="co">// We can make a couple of simplifying assumptions, such as a hard limit</span></span>
+<span id="cb5-10"><a href="#cb5-10" aria-hidden="true" tabindex="-1"></a>    <span class="co">// on the size of the pseudoterminal number.</span></span>
+<span id="cb5-11"><a href="#cb5-11" aria-hidden="true" tabindex="-1"></a>    <span class="kw">const</span> MAX_DIGITS_U32<span class="op">:</span> <span class="dt">usize</span> <span class="op">=</span> <span class="dv">10</span><span class="op">;</span></span>
+<span id="cb5-12"><a href="#cb5-12" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> ptsbuf<span class="op">:</span> [<span class="dt">u8</span><span class="op">;</span> MAX_DIGITS_U32<span class="op">+</span><span class="dv">1</span>] <span class="op">=</span> [<span class="dv">0</span><span class="op">;</span> MAX_DIGITS_U32<span class="op">+</span><span class="dv">1</span>]<span class="op">;</span></span>
+<span id="cb5-13"><a href="#cb5-13" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> <span class="kw">mut</span> i <span class="op">=</span> MAX_DIGITS_U32<span class="op">;</span></span>
+<span id="cb5-14"><a href="#cb5-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">while</span> ptsnum <span class="op">&gt;</span> <span class="dv">0</span> <span class="op">{</span></span>
+<span id="cb5-15"><a href="#cb5-15" aria-hidden="true" tabindex="-1"></a>        i <span class="op">-=</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-16"><a href="#cb5-16" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> digit <span class="op">=</span> ptsnum <span class="op">%</span> <span class="dv">10</span><span class="op">;</span></span>
+<span id="cb5-17"><a href="#cb5-17" aria-hidden="true" tabindex="-1"></a>        <span class="co">// 0x30 = '0'. Depends on the character encoding being UTF-8</span></span>
+<span id="cb5-18"><a href="#cb5-18" aria-hidden="true" tabindex="-1"></a>        ptsbuf[i] <span class="op">=</span> (<span class="dv">0x30</span> <span class="op">+</span> digit)</span>
+<span id="cb5-19"><a href="#cb5-19" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>try_into()</span>
+<span id="cb5-20"><a href="#cb5-20" aria-hidden="true" tabindex="-1"></a>            <span class="op">.</span>expect(<span class="st">&quot;can't convert digit to u8&quot;</span>)<span class="op">;</span></span>
+<span id="cb5-21"><a href="#cb5-21" aria-hidden="true" tabindex="-1"></a>        ptsnum <span class="op">/=</span> <span class="dv">10</span><span class="op">;</span></span>
+<span id="cb5-22"><a href="#cb5-22" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-23"><a href="#cb5-23" aria-hidden="true" tabindex="-1"></a>    <span class="co">// CString is far easier to use, but it requires a heap allocation, so</span></span>
+<span id="cb5-24"><a href="#cb5-24" aria-hidden="true" tabindex="-1"></a>    <span class="co">// we use CStr instead.</span></span>
+<span id="cb5-25"><a href="#cb5-25" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> ptsstrlen <span class="op">=</span> MAX_DIGITS_U32 <span class="op">-</span> i<span class="op">;</span></span>
+<span id="cb5-26"><a href="#cb5-26" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> ptsstr <span class="op">=</span> <span class="pp">CStr::</span>from_bytes_with_nul(<span class="op">&amp;</span>ptsbuf[i<span class="op">..</span>])<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb5-27"><a href="#cb5-27" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb5-28"><a href="#cb5-28" aria-hidden="true" tabindex="-1"></a>    <span class="co">// The rest of the function is just copying bytes around so we can end up</span></span>
+<span id="cb5-29"><a href="#cb5-29" aria-hidden="true" tabindex="-1"></a>    <span class="co">// with a buffer containing b&quot;/dev/pts/&lt;ptsnum&gt;\0&quot;</span></span>
+<span id="cb5-30"><a href="#cb5-30" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> path <span class="op">=</span> <span class="st">b&quot;/dev/pts/</span><span class="sc">\0</span><span class="st">&quot;</span><span class="op">;</span></span>
+<span id="cb5-31"><a href="#cb5-31" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> pathlen <span class="op">=</span> path<span class="op">.</span>len() <span class="op">-</span> <span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-32"><a href="#cb5-32" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> pathlen <span class="op">&gt;</span> buflen <span class="op">{</span></span>
+<span id="cb5-33"><a href="#cb5-33" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-34"><a href="#cb5-34" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-35"><a href="#cb5-35" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> path <span class="op">=</span> <span class="pp">CStr::</span>from_bytes_with_nul(path)<span class="op">.</span>unwrap()<span class="op">;</span></span>
+<span id="cb5-36"><a href="#cb5-36" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="op">{</span> path<span class="op">.</span>as_ptr()<span class="op">.</span>copy_to(buf<span class="op">,</span> pathlen) <span class="op">};</span></span>
+<span id="cb5-37"><a href="#cb5-37" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> pathlen <span class="op">+</span> ptsstrlen <span class="op">&gt;</span> buflen <span class="op">{</span></span>
+<span id="cb5-38"><a href="#cb5-38" aria-hidden="true" tabindex="-1"></a>        <span class="cf">return</span> <span class="op">-</span><span class="dv">1</span><span class="op">;</span></span>
+<span id="cb5-39"><a href="#cb5-39" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-40"><a href="#cb5-40" aria-hidden="true" tabindex="-1"></a>    <span class="kw">unsafe</span> <span class="op">{</span></span>
+<span id="cb5-41"><a href="#cb5-41" aria-hidden="true" tabindex="-1"></a>        ptsstr<span class="op">.</span>as_ptr()<span class="op">.</span>copy_to(buf<span class="op">.</span>add(pathlen)<span class="op">,</span> ptsstrlen)<span class="op">;</span></span>
+<span id="cb5-42"><a href="#cb5-42" aria-hidden="true" tabindex="-1"></a>        <span class="op">*</span>buf<span class="op">.</span>add(pathlen <span class="op">+</span> ptsstrlen) <span class="op">=</span> <span class="ch">'</span><span class="sc">\0</span><span class="ch">'</span> <span class="kw">as</span> <span class="dt">c_char</span><span class="op">;</span></span>
+<span id="cb5-43"><a href="#cb5-43" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb5-44"><a href="#cb5-44" aria-hidden="true" tabindex="-1"></a>    <span class="dv">0</span></span></code></pre></div>
+<p>Then we can call our POSIX standard functions to open a master and slave
+pty pair, substituting our custom <code>ptsname_r</code> function in place of the
+normal one.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode rust"><code class="sourceCode rust"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="at">#[</span>cfg_attr<span class="at">(</span>not<span class="at">(</span>test<span class="at">)</span><span class="op">,</span> no_mangle<span class="at">)]</span></span>
+<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="kw">fn</span> main() <span class="op">-&gt;</span> <span class="dt">i8</span> <span class="op">{</span></span>
+<span id="cb6-4"><a href="#cb6-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> master <span class="op">=</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>posix_openpt(<span class="pp">libc::</span><span class="cn">O_RDWR</span>) <span class="op">};</span></span>
+<span id="cb6-5"><a href="#cb6-5" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> master <span class="op">&lt;</span> <span class="dv">0</span> <span class="op">{</span></span>
+<span id="cb6-6"><a href="#cb6-6" aria-hidden="true" tabindex="-1"></a>        <span class="pp">panic!</span>(<span class="st">&quot;posix_openpt&quot;</span>)<span class="op">;</span></span>
+<span id="cb6-7"><a href="#cb6-7" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-8"><a href="#cb6-8" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="dv">0</span> <span class="op">&gt;</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>grantpt(master) <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb6-9"><a href="#cb6-9" aria-hidden="true" tabindex="-1"></a>        <span class="pp">panic!</span>(<span class="st">&quot;grantpt&quot;</span>)<span class="op">;</span></span>
+<span id="cb6-10"><a href="#cb6-10" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-11"><a href="#cb6-11" aria-hidden="true" tabindex="-1"></a>    <span class="cf">if</span> <span class="dv">0</span> <span class="op">&gt;</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>unlockpt(master) <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb6-12"><a href="#cb6-12" aria-hidden="true" tabindex="-1"></a>        <span class="pp">panic!</span>(<span class="st">&quot;unlockpt&quot;</span>)<span class="op">;</span></span>
+<span id="cb6-13"><a href="#cb6-13" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span>
+<span id="cb6-14"><a href="#cb6-14" aria-hidden="true" tabindex="-1"></a>    <span class="cf">match</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>fork() <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb6-15"><a href="#cb6-15" aria-hidden="true" tabindex="-1"></a>        <span class="op">-</span><span class="dv">1</span> <span class="op">=&gt;</span> <span class="pp">panic!</span>(<span class="st">&quot;fork&quot;</span>)<span class="op">,</span></span>
+<span id="cb6-16"><a href="#cb6-16" aria-hidden="true" tabindex="-1"></a>        <span class="dv">0</span> <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb6-17"><a href="#cb6-17" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> <span class="kw">mut</span> slave_name<span class="op">:</span> [<span class="dt">c_char</span><span class="op">;</span> <span class="dv">64</span>] <span class="op">=</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">MaybeUninit::</span>zeroed()<span class="op">.</span>assume_init() <span class="op">};</span></span>
+<span id="cb6-18"><a href="#cb6-18" aria-hidden="true" tabindex="-1"></a>            no_printf_ptsname_r(master<span class="op">,</span> slave_name<span class="op">.</span>as_mut_ptr()<span class="op">,</span> <span class="dv">64</span>)<span class="op">;</span></span>
+<span id="cb6-19"><a href="#cb6-19" aria-hidden="true" tabindex="-1"></a>            <span class="kw">let</span> slave <span class="op">=</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>open(slave_name<span class="op">.</span>as_ptr() <span class="kw">as</span> <span class="op">*</span><span class="kw">const</span> <span class="dt">c_char</span><span class="op">,</span> <span class="pp">libc::</span><span class="cn">O_RDWR</span>) <span class="op">};</span></span>
+<span id="cb6-20"><a href="#cb6-20" aria-hidden="true" tabindex="-1"></a>            <span class="cf">if</span> slave <span class="op">&lt;</span> <span class="dv">0</span> <span class="op">{</span></span>
+<span id="cb6-21"><a href="#cb6-21" aria-hidden="true" tabindex="-1"></a>                <span class="pp">panic!</span>(<span class="st">&quot;open&quot;</span>)<span class="op">;</span></span>
+<span id="cb6-22"><a href="#cb6-22" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb6-23"><a href="#cb6-23" aria-hidden="true" tabindex="-1"></a>            <span class="cf">for</span> fd <span class="kw">in</span> <span class="dv">0i32</span><span class="op">..</span><span class="dv">3</span> <span class="op">{</span></span>
+<span id="cb6-24"><a href="#cb6-24" aria-hidden="true" tabindex="-1"></a>                <span class="cf">if</span> <span class="dv">0</span> <span class="op">&gt;</span> <span class="kw">unsafe</span> <span class="op">{</span> <span class="pp">libc::</span>dup2(slave<span class="op">,</span> fd) <span class="op">}</span> <span class="op">{</span></span>
+<span id="cb6-25"><a href="#cb6-25" aria-hidden="true" tabindex="-1"></a>                    <span class="pp">panic!</span>(<span class="st">&quot;dup2&quot;</span>)<span class="op">;</span></span>
+<span id="cb6-26"><a href="#cb6-26" aria-hidden="true" tabindex="-1"></a>                <span class="op">}</span></span>
+<span id="cb6-27"><a href="#cb6-27" aria-hidden="true" tabindex="-1"></a>            <span class="op">}</span></span>
+<span id="cb6-28"><a href="#cb6-28" aria-hidden="true" tabindex="-1"></a>            <span class="co">// Child execs a shell (or other program) that can be &quot;driven&quot; by</span></span>
+<span id="cb6-29"><a href="#cb6-29" aria-hidden="true" tabindex="-1"></a>            <span class="co">// the parent program.</span></span>
+<span id="cb6-30"><a href="#cb6-30" aria-hidden="true" tabindex="-1"></a>            <span class="co">// unsafe { libc::execl(b&quot;/bin/sh\0&quot;.as_ptr() as *const c_char, ptr::null()) };</span></span>
+<span id="cb6-31"><a href="#cb6-31" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb6-32"><a href="#cb6-32" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb6-33"><a href="#cb6-33" aria-hidden="true" tabindex="-1"></a>        _ <span class="op">=&gt;</span> <span class="op">{</span></span>
+<span id="cb6-34"><a href="#cb6-34" aria-hidden="true" tabindex="-1"></a>            <span class="co">// parent communicates with child through the master side of the pty</span></span>
+<span id="cb6-35"><a href="#cb6-35" aria-hidden="true" tabindex="-1"></a>            <span class="co">// read/write calls here (from stdin/stdout or a socket or whatnot)</span></span>
+<span id="cb6-36"><a href="#cb6-36" aria-hidden="true" tabindex="-1"></a>            <span class="cf">return</span> <span class="dv">0</span><span class="op">;</span></span>
+<span id="cb6-37"><a href="#cb6-37" aria-hidden="true" tabindex="-1"></a>        <span class="op">}</span></span>
+<span id="cb6-38"><a href="#cb6-38" aria-hidden="true" tabindex="-1"></a>    <span class="op">}</span></span></code></pre></div>
+<p>Afterwards, we can see that all formatting code has vanished from our
+binary and the size of our text section has almost halved from 12.5 KiB to 5.7 KiB.</p>
+<pre><code>File  .text   Size     Crate Name
+1.1%  12.2%   715B [Unknown] __vdsosym
+0.6%   6.7%   391B [Unknown] static_init_tls
+0.6%   6.6%   387B [Unknown] __init_libc
+0.6%   6.0%   351B [Unknown] fork
+0.6%   5.9%   346B [Unknown] _start_c
+0.5%   5.0%   291B [Unknown] main
+0.4%   4.6%   269B [Unknown] __timedwait_cp
+0.4%   3.8%   221B [Unknown] __stdio_write
+0.3%   3.3%   191B [Unknown] _Fork
+0.3%   3.0%   178B [Unknown] __lockfile
+0.3%   3.0%   178B [Unknown] __lock
+0.2%   2.4%   142B [Unknown] open64
+0.2%   2.1%   121B [Unknown] __copy_tls
+0.2%   2.0%   118B [Unknown] __pthread_rwlock_timedwrlock
+0.2%   1.9%   113B [Unknown] pthread_rwlock_unlock
+0.2%   1.8%   108B [Unknown] __clock_gettime
+0.2%   1.8%   107B [Unknown] __init_tp
+0.2%   1.8%   105B [Unknown] __do_fini
+0.1%   1.5%    88B [Unknown] __timedwait
+0.1%   1.3%    78B [Unknown] close_file
+1.9%  20.9% 1.2KiB           And 42 smaller methods. Use -n N to show more.
+9.3% 100.0% 5.7KiB           .text section size, the file size is 61.3KiB</code></pre>
+<h1 id="resources">Resources</h1>
+<p><strong><a href="https://github.com/johnthagen/min-sized-rust">min-sized-rust</a></strong>: <em>Why
+all the weird flags in my example <code>cargo</code> commands? This Github
+repository contains a list of suggestions for making your Rust program
+as small as possible. I didn’t go all the way to writing <code>no-std</code> code,
+but I did use the nightly <code>build-std</code> feature, which recompiles the
+Rust’s <code>std</code> with only the features you specify in it.</em></p>
+<p><strong><a href="https://git.musl-libc.org/cgit/musl">musl’s source code</a></strong>: <em>Besides
+the fact that I was using <code>musl</code> as my chosen libc, I generally use
+<code>musl</code> source code to check what the reference implementation of a libc
+function looks like, since the code is much easier to read than GNU
+libc.</em></p>
+<p><strong>Advanced Programming in a UNIX Environment, 3rd ed</strong>: <em>APUE contains a
+fairly comprehensive discussion of pseudoterminals and how to use them
+in chapter 19.</em></p>
+<h1 id="appendix">Appendix</h1>
+<p>Want to check my work? Use the following script to set up a rust
+repository and check the cargo bloat numbers.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="co">#!/bin/bash</span></span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="va">rustproject</span><span class="op">=</span><span class="st">&quot;rust-remove-printf&quot;</span></span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'[+] initializing rust project'</span></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> init <span class="st">&quot;</span><span class="va">$rustproject</span><span class="st">&quot;</span></span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="fu">rm</span> <span class="st">&quot;</span><span class="va">$rustproject</span><span class="st">&quot;</span>/src/main.rs</span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="co"># Initial state of our rust project</span></span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> <span class="op">&lt;&lt; EOF</span> <span class="op">&gt;</span> <span class="va">$rustproject</span>/src/before.rs</span>
+<span id="cb8-11"><a href="#cb8-11" aria-hidden="true" tabindex="-1"></a><span class="st">#![cfg_attr(not(test), no_main)]</span></span>
+<span id="cb8-12"><a href="#cb8-12" aria-hidden="true" tabindex="-1"></a><span class="st">extern crate libc;</span></span>
+<span id="cb8-13"><a href="#cb8-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-14"><a href="#cb8-14" aria-hidden="true" tabindex="-1"></a><span class="st">use std::ffi::c_int;</span></span>
+<span id="cb8-15"><a href="#cb8-15" aria-hidden="true" tabindex="-1"></a><span class="st">use std::ptr;</span></span>
+<span id="cb8-16"><a href="#cb8-16" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-17"><a href="#cb8-17" aria-hidden="true" tabindex="-1"></a><span class="st">#[cfg_attr(not(test), no_mangle)]</span></span>
+<span id="cb8-18"><a href="#cb8-18" aria-hidden="true" tabindex="-1"></a><span class="st">fn main() {</span></span>
+<span id="cb8-19"><a href="#cb8-19" aria-hidden="true" tabindex="-1"></a><span class="st">    let mut master: c_int = 0;</span></span>
+<span id="cb8-20"><a href="#cb8-20" aria-hidden="true" tabindex="-1"></a><span class="st">    let mut slave: c_int = 0;</span></span>
+<span id="cb8-21"><a href="#cb8-21" aria-hidden="true" tabindex="-1"></a><span class="st">    if 0 &gt; unsafe {</span></span>
+<span id="cb8-22"><a href="#cb8-22" aria-hidden="true" tabindex="-1"></a><span class="st">        libc::openpty(</span></span>
+<span id="cb8-23"><a href="#cb8-23" aria-hidden="true" tabindex="-1"></a><span class="st">            &amp;mut master,</span></span>
+<span id="cb8-24"><a href="#cb8-24" aria-hidden="true" tabindex="-1"></a><span class="st">            &amp;mut slave,</span></span>
+<span id="cb8-25"><a href="#cb8-25" aria-hidden="true" tabindex="-1"></a><span class="st">            ptr::null_mut(),</span></span>
+<span id="cb8-26"><a href="#cb8-26" aria-hidden="true" tabindex="-1"></a><span class="st">            ptr::null(),</span></span>
+<span id="cb8-27"><a href="#cb8-27" aria-hidden="true" tabindex="-1"></a><span class="st">            ptr::null(),</span></span>
+<span id="cb8-28"><a href="#cb8-28" aria-hidden="true" tabindex="-1"></a><span class="st">        )</span></span>
+<span id="cb8-29"><a href="#cb8-29" aria-hidden="true" tabindex="-1"></a><span class="st">    } {</span></span>
+<span id="cb8-30"><a href="#cb8-30" aria-hidden="true" tabindex="-1"></a><span class="st">        panic!(&quot;openpty&quot;);</span></span>
+<span id="cb8-31"><a href="#cb8-31" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-32"><a href="#cb8-32" aria-hidden="true" tabindex="-1"></a><span class="st">    match unsafe { libc::fork() } {</span></span>
+<span id="cb8-33"><a href="#cb8-33" aria-hidden="true" tabindex="-1"></a><span class="st">        -1 =&gt; panic!(&quot;fork&quot;),</span></span>
+<span id="cb8-34"><a href="#cb8-34" aria-hidden="true" tabindex="-1"></a><span class="st">        0 =&gt; {</span></span>
+<span id="cb8-35"><a href="#cb8-35" aria-hidden="true" tabindex="-1"></a><span class="st">            for fd in 0i32..3 {</span></span>
+<span id="cb8-36"><a href="#cb8-36" aria-hidden="true" tabindex="-1"></a><span class="st">                if 0 &gt; unsafe { libc::dup2(slave, fd) } {</span></span>
+<span id="cb8-37"><a href="#cb8-37" aria-hidden="true" tabindex="-1"></a><span class="st">                    panic!(&quot;dup2&quot;);</span></span>
+<span id="cb8-38"><a href="#cb8-38" aria-hidden="true" tabindex="-1"></a><span class="st">                }</span></span>
+<span id="cb8-39"><a href="#cb8-39" aria-hidden="true" tabindex="-1"></a><span class="st">            }</span></span>
+<span id="cb8-40"><a href="#cb8-40" aria-hidden="true" tabindex="-1"></a><span class="st">            // Child execs a shell (or other program) that can be &quot;driven&quot; by</span></span>
+<span id="cb8-41"><a href="#cb8-41" aria-hidden="true" tabindex="-1"></a><span class="st">            // the parent program.</span></span>
+<span id="cb8-42"><a href="#cb8-42" aria-hidden="true" tabindex="-1"></a><span class="st">            // unsafe { libc::execl(b&quot;/bin/sh</span><span class="dt">\0</span><span class="st">&quot;.as_ptr() as *const c_char, ptr::null()) };</span></span>
+<span id="cb8-43"><a href="#cb8-43" aria-hidden="true" tabindex="-1"></a><span class="st">        }</span></span>
+<span id="cb8-44"><a href="#cb8-44" aria-hidden="true" tabindex="-1"></a><span class="st">        _ =&gt; {</span></span>
+<span id="cb8-45"><a href="#cb8-45" aria-hidden="true" tabindex="-1"></a><span class="st">            // parent communicates with child through the master side of the pty</span></span>
+<span id="cb8-46"><a href="#cb8-46" aria-hidden="true" tabindex="-1"></a><span class="st">            // read/write calls here (from stdin/stdout or a socket or whatnot)</span></span>
+<span id="cb8-47"><a href="#cb8-47" aria-hidden="true" tabindex="-1"></a><span class="st">        }</span></span>
+<span id="cb8-48"><a href="#cb8-48" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-49"><a href="#cb8-49" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb8-50"><a href="#cb8-50" aria-hidden="true" tabindex="-1"></a><span class="op">EOF</span></span>
+<span id="cb8-51"><a href="#cb8-51" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-52"><a href="#cb8-52" aria-hidden="true" tabindex="-1"></a><span class="co"># Rust project with our custom function</span></span>
+<span id="cb8-53"><a href="#cb8-53" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-54"><a href="#cb8-54" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> <span class="op">&lt;&lt; EOF</span> <span class="op">&gt;</span> <span class="va">$rustproject</span>/src/after.rs</span>
+<span id="cb8-55"><a href="#cb8-55" aria-hidden="true" tabindex="-1"></a><span class="st">#![cfg_attr(not(test), no_main)]</span></span>
+<span id="cb8-56"><a href="#cb8-56" aria-hidden="true" tabindex="-1"></a><span class="st">extern crate libc;</span></span>
+<span id="cb8-57"><a href="#cb8-57" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-58"><a href="#cb8-58" aria-hidden="true" tabindex="-1"></a><span class="st">use std::ffi::{c_char, c_int, CStr};</span></span>
+<span id="cb8-59"><a href="#cb8-59" aria-hidden="true" tabindex="-1"></a><span class="st">use std::mem::MaybeUninit;</span></span>
+<span id="cb8-60"><a href="#cb8-60" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-61"><a href="#cb8-61" aria-hidden="true" tabindex="-1"></a><span class="st">fn no_printf_ptsname_r(fd: c_int, buf: *mut c_char, buflen: libc::size_t) -&gt; c_int {</span></span>
+<span id="cb8-62"><a href="#cb8-62" aria-hidden="true" tabindex="-1"></a><span class="st">    // The ioctl call gives us the pseudoterminal number, but then we need</span></span>
+<span id="cb8-63"><a href="#cb8-63" aria-hidden="true" tabindex="-1"></a><span class="st">    // to convert the number to text _without_ using formatting calls.</span></span>
+<span id="cb8-64"><a href="#cb8-64" aria-hidden="true" tabindex="-1"></a><span class="st">    let mut ptsnum: c_int = unsafe { MaybeUninit::zeroed().assume_init() };</span></span>
+<span id="cb8-65"><a href="#cb8-65" aria-hidden="true" tabindex="-1"></a><span class="st">    if 0 != unsafe { libc::ioctl(fd, libc::TIOCGPTN, &amp;ptsnum) } {</span></span>
+<span id="cb8-66"><a href="#cb8-66" aria-hidden="true" tabindex="-1"></a><span class="st">        return -1;</span></span>
+<span id="cb8-67"><a href="#cb8-67" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-68"><a href="#cb8-68" aria-hidden="true" tabindex="-1"></a><span class="st">    // This block of code is roughly equivalent to a very limited itoa() call.</span></span>
+<span id="cb8-69"><a href="#cb8-69" aria-hidden="true" tabindex="-1"></a><span class="st">    // We can make a couple of simplifying assumptions, such as a hard limit</span></span>
+<span id="cb8-70"><a href="#cb8-70" aria-hidden="true" tabindex="-1"></a><span class="st">    // on the size of the pseudoterminal number.</span></span>
+<span id="cb8-71"><a href="#cb8-71" aria-hidden="true" tabindex="-1"></a><span class="st">    const MAX_DIGITS_U32: usize = 10;</span></span>
+<span id="cb8-72"><a href="#cb8-72" aria-hidden="true" tabindex="-1"></a><span class="st">    let mut ptsbuf: [u8; MAX_DIGITS_U32+1] = [0; MAX_DIGITS_U32+1];</span></span>
+<span id="cb8-73"><a href="#cb8-73" aria-hidden="true" tabindex="-1"></a><span class="st">    let mut i = MAX_DIGITS_U32;</span></span>
+<span id="cb8-74"><a href="#cb8-74" aria-hidden="true" tabindex="-1"></a><span class="st">    while ptsnum &gt; 0 {</span></span>
+<span id="cb8-75"><a href="#cb8-75" aria-hidden="true" tabindex="-1"></a><span class="st">        i -= 1;</span></span>
+<span id="cb8-76"><a href="#cb8-76" aria-hidden="true" tabindex="-1"></a><span class="st">        let digit = ptsnum % 10;</span></span>
+<span id="cb8-77"><a href="#cb8-77" aria-hidden="true" tabindex="-1"></a><span class="st">        // 0x30 = '0'. Depends on the character encoding being UTF-8</span></span>
+<span id="cb8-78"><a href="#cb8-78" aria-hidden="true" tabindex="-1"></a><span class="st">        ptsbuf[i] = (0x30 + digit)</span></span>
+<span id="cb8-79"><a href="#cb8-79" aria-hidden="true" tabindex="-1"></a><span class="st">            .try_into()</span></span>
+<span id="cb8-80"><a href="#cb8-80" aria-hidden="true" tabindex="-1"></a><span class="st">            .expect(&quot;can't convert digit to u8&quot;);</span></span>
+<span id="cb8-81"><a href="#cb8-81" aria-hidden="true" tabindex="-1"></a><span class="st">        ptsnum /= 10;</span></span>
+<span id="cb8-82"><a href="#cb8-82" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-83"><a href="#cb8-83" aria-hidden="true" tabindex="-1"></a><span class="st">    // CString is far easier to use, but it requires a heap allocation, so</span></span>
+<span id="cb8-84"><a href="#cb8-84" aria-hidden="true" tabindex="-1"></a><span class="st">    // we use CStr instead.</span></span>
+<span id="cb8-85"><a href="#cb8-85" aria-hidden="true" tabindex="-1"></a><span class="st">    let ptsstrlen = MAX_DIGITS_U32 - i;</span></span>
+<span id="cb8-86"><a href="#cb8-86" aria-hidden="true" tabindex="-1"></a><span class="st">    let ptsstr = CStr::from_bytes_with_nul(&amp;ptsbuf[i..]).unwrap();</span></span>
+<span id="cb8-87"><a href="#cb8-87" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-88"><a href="#cb8-88" aria-hidden="true" tabindex="-1"></a><span class="st">    // The rest of the function is just copying bytes around so we can end up</span></span>
+<span id="cb8-89"><a href="#cb8-89" aria-hidden="true" tabindex="-1"></a><span class="st">    // with a buffer containing b&quot;/dev/pts/&lt;ptsnum&gt;</span><span class="dt">\0</span><span class="st">&quot;</span></span>
+<span id="cb8-90"><a href="#cb8-90" aria-hidden="true" tabindex="-1"></a><span class="st">    let path = b&quot;/dev/pts/</span><span class="dt">\0</span><span class="st">&quot;;</span></span>
+<span id="cb8-91"><a href="#cb8-91" aria-hidden="true" tabindex="-1"></a><span class="st">    let pathlen = path.len() - 1;</span></span>
+<span id="cb8-92"><a href="#cb8-92" aria-hidden="true" tabindex="-1"></a><span class="st">    if pathlen &gt; buflen {</span></span>
+<span id="cb8-93"><a href="#cb8-93" aria-hidden="true" tabindex="-1"></a><span class="st">        return -1;</span></span>
+<span id="cb8-94"><a href="#cb8-94" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-95"><a href="#cb8-95" aria-hidden="true" tabindex="-1"></a><span class="st">    let path = CStr::from_bytes_with_nul(path).unwrap();</span></span>
+<span id="cb8-96"><a href="#cb8-96" aria-hidden="true" tabindex="-1"></a><span class="st">    unsafe { path.as_ptr().copy_to(buf, pathlen) };</span></span>
+<span id="cb8-97"><a href="#cb8-97" aria-hidden="true" tabindex="-1"></a><span class="st">    if pathlen + ptsstrlen &gt; buflen {</span></span>
+<span id="cb8-98"><a href="#cb8-98" aria-hidden="true" tabindex="-1"></a><span class="st">        return -1;</span></span>
+<span id="cb8-99"><a href="#cb8-99" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-100"><a href="#cb8-100" aria-hidden="true" tabindex="-1"></a><span class="st">    unsafe {</span></span>
+<span id="cb8-101"><a href="#cb8-101" aria-hidden="true" tabindex="-1"></a><span class="st">        ptsstr.as_ptr().copy_to(buf.add(pathlen), ptsstrlen);</span></span>
+<span id="cb8-102"><a href="#cb8-102" aria-hidden="true" tabindex="-1"></a><span class="st">        *buf.add(pathlen + ptsstrlen) = '</span><span class="dt">\0</span><span class="st">' as c_char;</span></span>
+<span id="cb8-103"><a href="#cb8-103" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-104"><a href="#cb8-104" aria-hidden="true" tabindex="-1"></a><span class="st">    0</span></span>
+<span id="cb8-105"><a href="#cb8-105" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb8-106"><a href="#cb8-106" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-107"><a href="#cb8-107" aria-hidden="true" tabindex="-1"></a><span class="st">#[cfg_attr(not(test), no_mangle)]</span></span>
+<span id="cb8-108"><a href="#cb8-108" aria-hidden="true" tabindex="-1"></a><span class="st">fn main() -&gt; i8 {</span></span>
+<span id="cb8-109"><a href="#cb8-109" aria-hidden="true" tabindex="-1"></a><span class="st">    let master = unsafe { libc::posix_openpt(libc::O_RDWR) };</span></span>
+<span id="cb8-110"><a href="#cb8-110" aria-hidden="true" tabindex="-1"></a><span class="st">    if master &lt; 0 {</span></span>
+<span id="cb8-111"><a href="#cb8-111" aria-hidden="true" tabindex="-1"></a><span class="st">        panic!(&quot;posix_openpt&quot;);</span></span>
+<span id="cb8-112"><a href="#cb8-112" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-113"><a href="#cb8-113" aria-hidden="true" tabindex="-1"></a><span class="st">    if 0 &gt; unsafe { libc::grantpt(master) } {</span></span>
+<span id="cb8-114"><a href="#cb8-114" aria-hidden="true" tabindex="-1"></a><span class="st">        panic!(&quot;grantpt&quot;);</span></span>
+<span id="cb8-115"><a href="#cb8-115" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-116"><a href="#cb8-116" aria-hidden="true" tabindex="-1"></a><span class="st">    if 0 &gt; unsafe { libc::unlockpt(master) } {</span></span>
+<span id="cb8-117"><a href="#cb8-117" aria-hidden="true" tabindex="-1"></a><span class="st">        panic!(&quot;unlockpt&quot;);</span></span>
+<span id="cb8-118"><a href="#cb8-118" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-119"><a href="#cb8-119" aria-hidden="true" tabindex="-1"></a><span class="st">    match unsafe { libc::fork() } {</span></span>
+<span id="cb8-120"><a href="#cb8-120" aria-hidden="true" tabindex="-1"></a><span class="st">        -1 =&gt; panic!(&quot;fork&quot;),</span></span>
+<span id="cb8-121"><a href="#cb8-121" aria-hidden="true" tabindex="-1"></a><span class="st">        0 =&gt; {</span></span>
+<span id="cb8-122"><a href="#cb8-122" aria-hidden="true" tabindex="-1"></a><span class="st">            let mut slave_name: [c_char; 64] = unsafe { MaybeUninit::zeroed().assume_init() };</span></span>
+<span id="cb8-123"><a href="#cb8-123" aria-hidden="true" tabindex="-1"></a><span class="st">            no_printf_ptsname_r(master, slave_name.as_mut_ptr(), 64);</span></span>
+<span id="cb8-124"><a href="#cb8-124" aria-hidden="true" tabindex="-1"></a><span class="st">            let slave = unsafe { libc::open(slave_name.as_ptr() as *const c_char, libc::O_RDWR) };</span></span>
+<span id="cb8-125"><a href="#cb8-125" aria-hidden="true" tabindex="-1"></a><span class="st">            if slave &lt; 0 {</span></span>
+<span id="cb8-126"><a href="#cb8-126" aria-hidden="true" tabindex="-1"></a><span class="st">                panic!(&quot;open&quot;);</span></span>
+<span id="cb8-127"><a href="#cb8-127" aria-hidden="true" tabindex="-1"></a><span class="st">            }</span></span>
+<span id="cb8-128"><a href="#cb8-128" aria-hidden="true" tabindex="-1"></a><span class="st">            for fd in 0i32..3 {</span></span>
+<span id="cb8-129"><a href="#cb8-129" aria-hidden="true" tabindex="-1"></a><span class="st">                if 0 &gt; unsafe { libc::dup2(slave, fd) } {</span></span>
+<span id="cb8-130"><a href="#cb8-130" aria-hidden="true" tabindex="-1"></a><span class="st">                    panic!(&quot;dup2&quot;);</span></span>
+<span id="cb8-131"><a href="#cb8-131" aria-hidden="true" tabindex="-1"></a><span class="st">                }</span></span>
+<span id="cb8-132"><a href="#cb8-132" aria-hidden="true" tabindex="-1"></a><span class="st">            }</span></span>
+<span id="cb8-133"><a href="#cb8-133" aria-hidden="true" tabindex="-1"></a><span class="st">            // Child execs a shell (or other program) that can be &quot;driven&quot; by</span></span>
+<span id="cb8-134"><a href="#cb8-134" aria-hidden="true" tabindex="-1"></a><span class="st">            // the parent program.</span></span>
+<span id="cb8-135"><a href="#cb8-135" aria-hidden="true" tabindex="-1"></a><span class="st">            // unsafe { libc::execl(b&quot;/bin/sh</span><span class="dt">\0</span><span class="st">&quot;.as_ptr() as *const c_char, ptr::null()) };</span></span>
+<span id="cb8-136"><a href="#cb8-136" aria-hidden="true" tabindex="-1"></a><span class="st">            return 0;</span></span>
+<span id="cb8-137"><a href="#cb8-137" aria-hidden="true" tabindex="-1"></a><span class="st">        }</span></span>
+<span id="cb8-138"><a href="#cb8-138" aria-hidden="true" tabindex="-1"></a><span class="st">        _ =&gt; {</span></span>
+<span id="cb8-139"><a href="#cb8-139" aria-hidden="true" tabindex="-1"></a><span class="st">            // parent communicates with child through the master side of the pty</span></span>
+<span id="cb8-140"><a href="#cb8-140" aria-hidden="true" tabindex="-1"></a><span class="st">            // read/write calls here (from stdin/stdout or a socket or whatnot)</span></span>
+<span id="cb8-141"><a href="#cb8-141" aria-hidden="true" tabindex="-1"></a><span class="st">            return 0;</span></span>
+<span id="cb8-142"><a href="#cb8-142" aria-hidden="true" tabindex="-1"></a><span class="st">        }</span></span>
+<span id="cb8-143"><a href="#cb8-143" aria-hidden="true" tabindex="-1"></a><span class="st">    }</span></span>
+<span id="cb8-144"><a href="#cb8-144" aria-hidden="true" tabindex="-1"></a><span class="st">}</span></span>
+<span id="cb8-145"><a href="#cb8-145" aria-hidden="true" tabindex="-1"></a><span class="op">EOF</span></span>
+<span id="cb8-146"><a href="#cb8-146" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-147"><a href="#cb8-147" aria-hidden="true" tabindex="-1"></a><span class="co"># Cargo toml with custom release and bloat profiles</span></span>
+<span id="cb8-148"><a href="#cb8-148" aria-hidden="true" tabindex="-1"></a><span class="co">#</span></span>
+<span id="cb8-149"><a href="#cb8-149" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span> <span class="op">&lt;&lt; EOF</span> <span class="op">&gt;</span> <span class="va">$rustproject</span>/Cargo.toml</span>
+<span id="cb8-150"><a href="#cb8-150" aria-hidden="true" tabindex="-1"></a><span class="st">[package]</span></span>
+<span id="cb8-151"><a href="#cb8-151" aria-hidden="true" tabindex="-1"></a><span class="st">name = &quot;</span><span class="va">$rustproject</span><span class="st">&quot;</span></span>
+<span id="cb8-152"><a href="#cb8-152" aria-hidden="true" tabindex="-1"></a><span class="st">version = &quot;0.1.0&quot;</span></span>
+<span id="cb8-153"><a href="#cb8-153" aria-hidden="true" tabindex="-1"></a><span class="st">edition = &quot;2021&quot;</span></span>
+<span id="cb8-154"><a href="#cb8-154" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-155"><a href="#cb8-155" aria-hidden="true" tabindex="-1"></a><span class="st">[dependencies]</span></span>
+<span id="cb8-156"><a href="#cb8-156" aria-hidden="true" tabindex="-1"></a><span class="st">libc = &quot;*&quot;</span></span>
+<span id="cb8-157"><a href="#cb8-157" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-158"><a href="#cb8-158" aria-hidden="true" tabindex="-1"></a><span class="st">[profile.release]</span></span>
+<span id="cb8-159"><a href="#cb8-159" aria-hidden="true" tabindex="-1"></a><span class="st">opt-level = &quot;z&quot;</span></span>
+<span id="cb8-160"><a href="#cb8-160" aria-hidden="true" tabindex="-1"></a><span class="st">lto = true</span></span>
+<span id="cb8-161"><a href="#cb8-161" aria-hidden="true" tabindex="-1"></a><span class="st">codegen-units = 1</span></span>
+<span id="cb8-162"><a href="#cb8-162" aria-hidden="true" tabindex="-1"></a><span class="st">panic = &quot;abort&quot;</span></span>
+<span id="cb8-163"><a href="#cb8-163" aria-hidden="true" tabindex="-1"></a><span class="st">strip = true</span></span>
+<span id="cb8-164"><a href="#cb8-164" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-165"><a href="#cb8-165" aria-hidden="true" tabindex="-1"></a><span class="st">[profile.bloat]</span></span>
+<span id="cb8-166"><a href="#cb8-166" aria-hidden="true" tabindex="-1"></a><span class="st">inherits = &quot;release&quot;</span></span>
+<span id="cb8-167"><a href="#cb8-167" aria-hidden="true" tabindex="-1"></a><span class="st">strip = false</span></span>
+<span id="cb8-168"><a href="#cb8-168" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-169"><a href="#cb8-169" aria-hidden="true" tabindex="-1"></a><span class="st">[[bin]]</span></span>
+<span id="cb8-170"><a href="#cb8-170" aria-hidden="true" tabindex="-1"></a><span class="st">name = &quot;before&quot;</span></span>
+<span id="cb8-171"><a href="#cb8-171" aria-hidden="true" tabindex="-1"></a><span class="st">path = &quot;src/before.rs&quot;</span></span>
+<span id="cb8-172"><a href="#cb8-172" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-173"><a href="#cb8-173" aria-hidden="true" tabindex="-1"></a><span class="st">[[bin]]</span></span>
+<span id="cb8-174"><a href="#cb8-174" aria-hidden="true" tabindex="-1"></a><span class="st">name = &quot;after&quot;</span></span>
+<span id="cb8-175"><a href="#cb8-175" aria-hidden="true" tabindex="-1"></a><span class="st">path = &quot;src/after.rs&quot;</span></span>
+<span id="cb8-176"><a href="#cb8-176" aria-hidden="true" tabindex="-1"></a><span class="op">EOF</span></span>
+<span id="cb8-177"><a href="#cb8-177" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-178"><a href="#cb8-178" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> <span class="va">$rustproject</span></span>
+<span id="cb8-179"><a href="#cb8-179" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'[+] comparing bloat of before and after targets'</span></span>
+<span id="cb8-180"><a href="#cb8-180" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'    bloat with formatting'</span></span>
+<span id="cb8-181"><a href="#cb8-181" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> before <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span>
+<span id="cb8-182"><a href="#cb8-182" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span></span>
+<span id="cb8-183"><a href="#cb8-183" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'    bloat without formatting'</span></span>
+<span id="cb8-184"><a href="#cb8-184" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> after <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span></code></pre></div>
+<section id="footnotes" class="footnotes footnotes-end-of-document" role="doc-endnotes">
+<hr />
+<ol>
+<li id="fn1"><p>The <code>cargo bloat</code> command</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> before <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span></code></pre></div>
+<p>closely approximates the real world program compilation options. See
+<a href="#resources">Resources</a> and <a href="#appendix">Appendix</a> for how and why I
+used these options.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn2"><p>Mostly using Rust’s
+<a href="https://doc.rust-lang.org/std/macro.todo.html">todo!</a> macro to
+remove code and recheck the bloat results.<a href="#fnref2" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+<li id="fn3"><p><code>ptsname_r</code> is the thread-safe version of <code>ptsname</code>. musl
+implements <code>ptsname</code> as a call to <code>ptsname_r</code>.<a href="#fnref3" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
+</ol>
+</section>
+    </section>
+</article>
+
+        </main>
+    </body>
+</html>
