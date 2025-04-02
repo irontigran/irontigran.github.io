@@ -9,21 +9,23 @@
         <link rel="stylesheet" href="../css/syntax.css" />
     </head>
     <body>
-    <nav>
-        <a href="../index.html"><img src="../images/change-ring.png" id="logo" width="275px"></a>
-        
-            <hr />
-            <div id="toc">
-            <ul>
+        <nav>
+            <div class="pad-img-box">
+                <a href="../index.html"><img src="../images/change-ring-solid.png" id="logo" class="responsive-img"></a>
+            </div>
+            
+                <hr />
+                <div id="toc">
+                <ul>
 <li><a href="#context-a-really-tiny-rust-program" id="toc-context-a-really-tiny-rust-program">Context: a really tiny Rust program</a></li>
 <li><a href="#why-does-openpty-require-printf" id="toc-why-does-openpty-require-printf">Why does <code>openpty</code> require <code>printf</code>?</a></li>
 <li><a href="#how-do-we-get-a-pseudoterminal-without-printf" id="toc-how-do-we-get-a-pseudoterminal-without-printf">How do we get a pseudoterminal without <code>printf</code>?</a></li>
 <li><a href="#resources" id="toc-resources">Resources</a></li>
 <li><a href="#appendix" id="toc-appendix">Appendix</a></li>
 </ul>
-            </div>
-        
-    </nav>
+                </div>
+            
+        </nav>
 
         <main role="main">
             <h1>Removing Printf Code from a Rust Program</h1>
