@@ -96,7 +96,14 @@ by an unexpected ~10KB”.)</p>
 <span id="cb1-39"><a href="#cb1-39" aria-hidden="true" tabindex="-1"></a><span class="op">}</span></span></code></pre></div>
 <p><code>cargo bloat</code> is a handy tool that will tell you what exactly is taking
 up all that space. Using it to compile and analyze the above
-snippet<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1</sup></a>, I get this output:</p>
+snippet, I get this output:</p>
+<div class="sidenote">
+<p>The <code>cargo bloat</code> command</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> before <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span></code></pre></div>
+<p>closely approximates the real world program compilation options. See
+<a href="#resources">Resources</a> and <a href="#appendix">Appendix</a> for how and why I
+used these options.</p>
+</div>
 <pre><code>     File  .text    Size     Crate Name
      4.1%  22.8%  2.9KiB [Unknown] fmt_fp
      3.4%  18.6%  2.3KiB [Unknown] printf_core
@@ -125,10 +132,15 @@ snippet<a href="#fn1" class="footnote-ref" id="fnref1" role="doc-noteref"><sup>1
 code, it used more space. When you’re aiming for &lt;100KB program, even 5–10KB
 is a noticeable percentage.</p>
 <h1 id="why-does-openpty-require-printf">Why does <code>openpty</code> require <code>printf</code>?</h1>
-<p>After some experimentation,<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a> I realized that the culprit was the <code>openpty</code>
+<p>After some experimentation, I realized that the culprit was the <code>openpty</code>
 call. But experimentation doesn’t tell us why. Nor does the
 <a href="https://www.man7.org/linux/man-pages/man3/openpty.3.html">manpage</a> give us any
 hint—the only reference to string manipulation is:</p>
+<div class="sidenote">
+<p>Mostly using Rust’s
+<a href="https://doc.rust-lang.org/std/macro.todo.html">todo!</a> macro to
+remove code and recheck the bloat results.</p>
+</div>
 <blockquote>
 <p>if <em>name</em> is not NULL, the filename of the slave is returned in
 <em>name</em>.</p>
@@ -165,9 +177,13 @@ for opening a pseudoterminal. The POSIX standard specifies
 <code>open</code> on the slave filename. (You can see why <code>openpty</code> is more
 popular, despite being non-standard.) Unfortunately, using the POSIX
 standard functions doesn’t save us—
-<a href="https://git.musl-libc.org/cgit/musl/tree/src/misc/pty.c"><code>ptsname</code></a><a href="#fn3" class="footnote-ref" id="fnref3" role="doc-noteref"><sup>3</sup></a>
+<a href="https://git.musl-libc.org/cgit/musl/tree/src/misc/pty.c"><code>ptsname</code></a>
 uses <code>snprintf</code> to return the filename in almost the exact same manner
 as <code>openpty</code> does.</p>
+<div class="sidenote">
+<p><code>ptsname_r</code> is the thread-safe version of <code>ptsname</code>. musl
+implements <code>ptsname</code> as a call to <code>ptsname_r</code>.</p>
+</div>
 <p>Unfortunately, we’re going to have to reimplement some libc
 functionality to get around the formatting call. We have a couple
 options:</p>
@@ -497,21 +513,6 @@ repository and check the cargo bloat numbers.</p>
 <span id="cb8-182"><a href="#cb8-182" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span></span>
 <span id="cb8-183"><a href="#cb8-183" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'    bloat without formatting'</span></span>
 <span id="cb8-184"><a href="#cb8-184" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> after <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span></code></pre></div>
-<section id="footnotes" class="footnotes footnotes-end-of-document" role="doc-endnotes">
-<hr />
-<ol>
-<li id="fn1"><p>The <code>cargo bloat</code> command</p>
-<div class="sourceCode" id="cb2"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">cargo</span> +nightly bloat <span class="at">--target</span> x86_64-unknown-linux-musl <span class="at">--profile</span> bloat <span class="at">--bin</span> before <span class="at">-Zbuild-std</span><span class="op">=</span>std,core,panic_abort <span class="at">-Zbuild-std-features</span><span class="op">=</span>panic_immediate_abort <span class="dv">2</span><span class="op">&gt;</span> /dev/null</span></code></pre></div>
-<p>closely approximates the real world program compilation options. See
-<a href="#resources">Resources</a> and <a href="#appendix">Appendix</a> for how and why I
-used these options.<a href="#fnref1" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
-<li id="fn2"><p>Mostly using Rust’s
-<a href="https://doc.rust-lang.org/std/macro.todo.html">todo!</a> macro to
-remove code and recheck the bloat results.<a href="#fnref2" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
-<li id="fn3"><p><code>ptsname_r</code> is the thread-safe version of <code>ptsname</code>. musl
-implements <code>ptsname</code> as a call to <code>ptsname_r</code>.<a href="#fnref3" class="footnote-back" role="doc-backlink">↩︎</a></p></li>
-</ol>
-</section>
     </section>
 </article>
 
