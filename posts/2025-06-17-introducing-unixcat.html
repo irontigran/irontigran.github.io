@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Introducing unixcat</title>
+        <link rel="stylesheet" href="../css/default.css" />
+        <link rel="stylesheet" href="../css/syntax.css" />
+        <link rel="icon" type="image/png" href="../images/favicon-96x96.png" sizes="96x96" />
+        <link rel="icon" type="image/svg+xml" href="../images/favicon.svg" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+        <link rel="apple-touch-icon" sizes="180x180" href="../images/apple-touch-icon.png" />
+        <link rel="manifest" href="../images/site.webmanifest" />
+    </head>
+    <body>
+        <nav>
+            <div class="pad-img-box">
+                <a href="../index.html"><img src="../images/change-ring-solid.png" id="logo" class="responsive-img"></a>
+            </div>
+            
+                <hr />
+                <div id="toc">
+                <ul>
+<li><a href="#background" id="toc-background">Background</a></li>
+<li><a href="#its-not-just-file-descriptors" id="toc-its-not-just-file-descriptors">It’s not just file descriptors</a></li>
+<li><a href="#three-systems-five-implementations" id="toc-three-systems-five-implementations">Three systems, five implementations</a></li>
+<li><a href="#sometimes-old-tools-are-the-best-tools" id="toc-sometimes-old-tools-are-the-best-tools">Sometimes old tools are the best tools</a></li>
+<li><a href="#so-how-did-you-use-llms" id="toc-so-how-did-you-use-llms">So how did you use LLMs?</a></li>
+<li><a href="#further-reading" id="toc-further-reading">Further reading</a></li>
+</ul>
+                </div>
+            
+        </nav>
+
+        <main role="main">
+            <h1>Introducing unixcat</h1>
+            <article>
+    <section class="header">
+        Posted on June 17, 2025
+        
+        <hr />
+    </section>
+    <section>
+        <p><a href="https://github.com/irontigran/unixcat"><code>unixcat</code></a> is like <code>netcat</code>, but for unix domain sockets.</p>
+<div class="sidenote">
+<p>But wait!
+Doesn’t <code>netcat</code> already support unix domain sockets?
+Yes, but only barely; read on.</p>
+</div>
+<h1 id="background">Background</h1>
+<p>Recently, I was writing a program that (for various reasons) needed to connect to a <a href="https://www.man7.org/linux/man-pages/man7/unix.7.html">unix domain socket</a> and pass a file descriptor to another process.</p>
+<p>“Passing a file descriptor” is a convenience feature for unix domain sockets.
+If you have a file open in one process and you’d like it to also be open in another process, you can send the file descriptor in a special message—the kernel will take care of deconflicting resources, and the receiving process gets a file descriptor that refers to the same file.</p>
+<p>As I was writing this program, I was also obliged to write a listener that received and parsed this message in order to test that I was doing it right.
+I found this to be rather annoying—when implementing some protocol, I always prefer to have a reference peer to make testing easy.
+Normally, my tool of choice for testing networking programs is <code>netcat</code>; but <code>netcat</code>, despite its vast array of features (at least in the version maintained by <a href="https://nmap.org/">nmap.org</a>—other versions have fewer features), does not support passing a file descriptor over a unix domain socket.</p>
+<div class="sidenote">
+<p>Without a reference implementation, I have made the same mistake when implementing both sides of a protocol, resulting in a hard-to-debug situation where both the sender and receiver are wrong by spec, but can communicate with each other just fine.</p>
+</div>
+<p>So I decided to implement my own tool that allows for passing file descriptors, as well as other things, from the command line.
+If you want to try it out or read the documentation, head over to the <a href="https://github.com/irontigran/unixcat">repo</a>.
+The rest of this post will be some self-indulgent notes on the experience of writing <code>unixcat</code>.</p>
+<h1 id="its-not-just-file-descriptors">It’s not just file descriptors</h1>
+<p>Messages that contain extra information (like file descriptors) are called “ancillary messages”.
+Passing a file descriptor is the only portable ancillary message, but the goal here was supporting as many systems, and all of their available ancillary messages, as possible.</p>
+<p>Linux allows you to request your peer’s SELinux security context over a unix domain socket, but the real trick to implement was passing process credentials.</p>
+<h1 id="three-systems-five-implementations">Three systems, five implementations</h1>
+<p>The concept of passing process credentials is pretty simple: provide the right combination of socket flags and the kernel will tell you the <code>pid</code>, <code>uid</code>, and <code>gid</code> of your peer (or some variation thereof, depending on the OS).
+However, almost none of the Unixes do it exactly the same way.</p>
+<p>MacOS, OpenBSD, and DragonflyBSD all disable passing credentials.</p>
+<div class="sidenote">
+<p>Disabling credential passing is a boring but safe decision.
+Providing these credentials <em>seems</em> secure, because the kernel can make sure that the peer process isn’t lying, but there are possible race conditions and unexpected situations where the received <code>uid</code> is the <em>effective</em> <code>uid</code> instead of the real <code>uid</code>.</p>
+</div>
+<p>NetBSD allows you to pass credentials, but only from the receiver side.
+If you want your peer’s credentials, you specify a socket option and the kernel fills in the credentials with the next <code>recvmsg</code> call.
+Easy enough.</p>
+<p>Linux (expectedly) and FreeBSD (unexpectedly) are the two implementations that provided all of the complexity.
+Like NetBSD, Linux has a socket option that the receiver can specify to get peer credentials.
+(Unlike NetBSD, this option turns on receipt of credentials until it’s disabled—NetBSD’s version is one message and done.)
+But Linux also allows for sending credentials—a privileged process can fill in whatever values it likes in the credentials field.
+Unintuitively, sending credentials on Linux is only allowed if the receiver has specified the requisite socket option—no sending credentials without consent from the receiver.</p>
+<p>As for FreeBSD… it has the same “receive credentials” option as NetBSD, but NetBSD’s option only enables receiving credentials, so FreeBSD also provides an option to receive credentials with every message, but that option provides slightly different credentials than the “receive only once” option, and therefore a different type of ancillary message; you can also send credentials on FreeBSD, though you can’t modify them like Linux, and sending credentials provides yet another slightly different set of credentials, but not a different type of ancillary message, so the only way to differentiate between sent and received credentials is to check the length of the data; also, setting the receive option will override the sent message in that you will get the received credential struct`and the sent credential struct will be discarded.</p>
+<p>Trying to fit this all in one program was a chore.</p>
+<h1 id="sometimes-old-tools-are-the-best-tools">Sometimes old tools are the best tools</h1>
+<p><code>unixcat</code> is meant to be a fairly old-school debugging tool that supports as many Unix-derived operating systems as possible.
+It turns out the best build system for this is still GNU Autotools.
+Prior to this project, I had only interacted with Autotools as a user, so it was an interesting experience to write a <code>configure.ac</code> script.
+I wouldn’t say that Autotools is <em>easy</em> to use, but it is battle-tested.
+If it’s possible to support what you want to do, Autotools has a way.
+Writing my own feature tests was reasonably straightforward—I was able to stumble through writing some M4 macros without really understanding the language.</p>
+<h1 id="so-how-did-you-use-llms">So how did you use LLMs?</h1>
+<p><code>unixcat</code> was the first time I used an LLM as anything more than a toy.
+“Agentic programming” became a buzzword a few months before I committed any code, so I put aside my natural tendency towards curmudgeonliness, bought $20 in Anthropic credits, and downloaded Claude Code.
+It worked pretty well!
+Not being an LLM power-user, I had bounced off using LLM web interfaces for programming.
+As far as I could tell, the key part of getting them to work well was providing them with the correct context—since I was just working in the web interface, that involved a lot of copy-pasting that I found awkward.
+Being able to run <code>claude</code> in my terminal and telling it to read certain files removed those barriers.</p>
+<div class="sidenote">
+<p>Don’t take anything I say about LLMs too seriously at the moment.
+My particular combination of stinginess and intransigence make me a particularly poor example to follow.
+Some day, I will have an an educated and well-considered opinion about using LLMs for programming, but for now these are just anecdotes.</p>
+</div>
+<p>My most successful use of <code>claude</code> was writing autoconf tests and bash scripts.
+Whenver I had the feeling of “ugh, I really don’t want to write this,” getting an LLM to generate a starting point helped break through any writer’s block.
+Telling an LLM to “write some scripts to test out every possible combination of these three options” is a lot nicer than actually writing the scripts yourself.</p>
+<p>I had far less success getting <code>claude</code> to write any feature code.
+For example, dealing with a subtle bug in my polling loop, I wrote a test, verified it failed, and told <code>claude</code> to fix my poll loop until the test passed.
+This is a textbook use of agentic programming right?
+But the result was a hacky fix that addressed only the symptom of the problem; I hurriedly deleted it and went back to fixing it myself.
+It’s possible that further iteration would have created a better solution but was already feeling like I was burning money.
+(I told you I was stingy.)</p>
+<div class="sidenote">
+<p>For the curious: I was mishandling reading an EOF value from a socket and closing the connection too early.
+<code>claude</code>’s solution was… to just not close the connection until <code>recvmsg</code> had returned an EOF value twice.</p>
+</div>
+<p>Cost: somewhere between $7–$8 over the course of two months. Benefits: less time spent looking up arcane syntax; probably more comprehensive tests on account of making them easier to write. Never let it be said I don’t change with the times.</p>
+<h1 id="further-reading">Further reading</h1>
+<ul>
+<li><p><a href="https://simonwillison.net/2025/Mar/11/using-llms-for-code/">Simon Willison</a> and <a href="https://fly.io/blog/youre-all-nuts/">Thomas Ptacek</a> convinced me to at least try seriously using of LLMs.</p></li>
+<li><p>The <a href="https://www.man7.org/linux/man-pages/man7/unix.7.html">Linux</a>, <a href="https://man.freebsd.org/cgi/man.cgi?query=unix">FreeBSD</a>, and <a href="https://man.netbsd.org/unix.4">NetBSD</a> manpages tell you almost everything you need to know about using unix domain sockets.
+Frustratingly, I could not find an authoritative source on the MacOS interface, relying instead on deprecated man pages, Stack Overflow answers, and experimentation to figure out what worked on Mac.</p></li>
+</ul>
+    </section>
+</article>
+
+        </main>
+    </body>
+</html>
