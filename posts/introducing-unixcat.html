@@ -14,7 +14,7 @@
         <link rel="manifest" href="../images/site.webmanifest" />
     </head>
     <body>
-        <nav>
+        <nav class="wide">
             <div class="pad-img-box">
                 <a href="../index.html"><img src="../images/change-ring-solid.png" id="logo" class="responsive-img"></a>
             </div>
@@ -32,12 +32,15 @@
                 </div>
             
         </nav>
+        <nav class="narrow">
+            <a href="../index.html">tailorpaul.com</a>
+        </nav>
 
         <main role="main">
             <h1>Introducing unixcat</h1>
             <article>
     <section class="header">
-        Posted on June 17, 2025 · last updated: June 23, 2025
+        Posted on June 17, 2025 · last updated: June 24, 2025
         
         <hr />
     </section>
@@ -100,7 +103,7 @@ Being able to run <code>claude</code> in my terminal and telling it to read cert
 <div class="sidenote">
 <p>Don’t take anything I say about LLMs too seriously at the moment.
 My particular combination of stinginess and intransigence make me a particularly poor example to follow.
-Some day, I will have an an educated and well-considered opinion about using LLMs for programming, but for now these are just anecdotes.</p>
+Some day, I will have an educated and well-considered opinion about using LLMs for programming, but for now these are just anecdotes.</p>
 </div>
 <p>My most successful use of <code>claude</code> was writing autoconf tests and bash scripts.
 Whenver I had the feeling of “ugh, I really don’t want to write this,” getting an LLM to generate a starting point helped break through any writer’s block.
@@ -109,7 +112,7 @@ Telling an LLM to “write some scripts to test out every possible combination o
 For example, dealing with a subtle bug in my polling loop, I wrote a test, verified it failed, and told <code>claude</code> to fix my poll loop until the test passed.
 This is a textbook use of agentic programming right?
 But the result was a hacky fix that addressed only the symptom of the problem; I hurriedly deleted it and went back to fixing it myself.
-It’s possible that further iteration would have created a better solution but was already feeling like I was burning money.
+It’s possible that further iteration would have created a better solution but I already felt like I was burning money.
 (I told you I was stingy.)</p>
 <div class="sidenote">
 <p>For the curious: I was mishandling reading an EOF value from a socket and closing the connection too early.
