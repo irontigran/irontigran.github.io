@@ -50,7 +50,7 @@
             <h1>Introducing unixcat</h1>
             <article>
     <section class="header">
-        Posted on June 17, 2025 · last updated: June 24, 2025
+        Posted on June 17, 2025 · last updated: August 28, 2025
         
         <hr />
     </section>
@@ -94,7 +94,7 @@ Like NetBSD, Linux has a socket option that the receiver can specify to get peer
 (Unlike NetBSD, this option turns on receipt of credentials until it’s disabled—NetBSD’s version is one message and done.)
 But Linux also allows for sending credentials—a privileged process can fill in whatever values it likes in the credentials field.
 Unintuitively, sending credentials on Linux is only allowed if the receiver has specified the requisite socket option—no sending credentials without consent from the receiver.</p>
-<p>As for FreeBSD… it has the same “receive credentials” option as NetBSD, but NetBSD’s option only enables receiving credentials, so FreeBSD also provides an option to receive credentials with every message, but that option provides slightly different credentials than the “receive only once” option, and therefore a different type of ancillary message; you can also send credentials on FreeBSD, though you can’t modify them like Linux, and sending credentials provides yet another slightly different set of credentials, but not a different type of ancillary message, so the only way to differentiate between sent and received credentials is to check the length of the data; also, setting the receive option will override the sent message in that you will get the received credential struct`and the sent credential struct will be discarded.</p>
+<p>As for FreeBSD… it has the same “receive credentials” option as NetBSD, but NetBSD’s option only enables receiving credentials once, so FreeBSD also provides an option to receive credentials with every message, but that option provides slightly different credentials than the “receive only once” option, and therefore a different type of ancillary message; you can also send credentials on FreeBSD, though you can’t modify them like Linux, and sending credentials provides yet another slightly different set of credentials, but not a different type of ancillary message, so the only way to differentiate between sent and received credentials is to check the length of the data; also, setting the receive option will override the sent message in that you will get the received credential struct`and the sent credential struct will be discarded.</p>
 <p>Trying to fit this all in one program was a chore.</p>
 <h1 id="sometimes-old-tools-are-the-best-tools">Sometimes old tools are the best tools</h1>
 <p><code>unixcat</code> is meant to be a fairly old-school debugging tool that supports as many Unix-derived operating systems as possible.
@@ -121,7 +121,7 @@ Telling an LLM to “write some scripts to test out every possible combination o
 <p>I had far less success getting <code>claude</code> to write any feature code.
 For example, dealing with a subtle bug in my polling loop, I wrote a test, verified it failed, and told <code>claude</code> to fix my poll loop until the test passed.
 This is a textbook use of agentic programming right?
-But the result was a hacky fix that addressed only the symptom of the problem; I hurriedly deleted it and went back to fixing it myself.
+But the result was a hacky fix that addressed only the symptom of the problem; I hurriedly deleted it and went back to fixing the bug myself.
 It’s possible that further iteration would have created a better solution but I already felt like I was burning money.
 (I told you I was stingy.)</p>
 <div class="sidenote">

@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>An Optimal Yahtzee Solver in Haskell</title>
+        <link rel="stylesheet" href="../css/default.css" />
+        <link rel="stylesheet" href="../css/syntax.css" />
+        <link rel="icon" type="image/png" href="../images/favicon-96x96.png" sizes="96x96" />
+        <link rel="icon" type="image/svg+xml" href="../images/favicon.svg" />
+        <link rel="shortcut icon" href="../images/favicon.ico" />
+        <link rel="apple-touch-icon" sizes="180x180" href="../images/apple-touch-icon.png" />
+        <link rel="manifest" href="../images/site.webmanifest" />
+    </head>
+    <body>
+        <nav class="wide">
+            <div class="pad-img-box">
+                <a href="../index.html"><img src="../images/change-ring-solid.png" id="logo" class="responsive-img"></a>
+            </div>
+            
+                <hr />
+                <div id="toc">
+                <ul>
+<li><a href="#introduction" id="toc-introduction">Introduction</a>
+<ul>
+<li><a href="#imports" id="toc-imports">Imports</a></li>
+</ul></li>
+<li><a href="#type-definitions" id="toc-type-definitions">Type Definitions</a>
+<ul>
+<li><a href="#scorecard" id="toc-scorecard">Scorecard</a></li>
+<li><a href="#dice-rolls" id="toc-dice-rolls">Dice Rolls</a></li>
+<li><a href="#turns" id="toc-turns">Turns</a></li>
+<li><a href="#gamestates" id="toc-gamestates">Gamestates</a></li>
+</ul></li>
+<li><a href="#solving-yahtzee" id="toc-solving-yahtzee">Solving Yahtzee</a>
+<ul>
+<li><a href="#computing-a-score" id="toc-computing-a-score">Computing a Score</a></li>
+<li><a href="#locks-threads-and-caches-oh-my" id="toc-locks-threads-and-caches-oh-my">Locks, Threads, and Caches, Oh My!</a></li>
+</ul></li>
+<li><a href="#serialization" id="toc-serialization">Serialization</a></li>
+<li><a href="#finally-a-main-function" id="toc-finally-a-main-function">Finally, A Main Function</a></li>
+<li><a href="#appendix-various-scoring-functions" id="toc-appendix-various-scoring-functions">Appendix: Various Scoring Functions</a></li>
+</ul>
+                </div>
+            
+        </nav>
+        <nav class="narrow">
+            <div class="pad-img-box">
+                <a href="../index.html"><img src="../images/change-ring-solid.png" id="small-logo" width="50px" height="50px"></a>
+            </div>
+            <div id="permlinks">
+    <ul>
+        <li><a href="../index.html">Home</a></li>
+        <li><a href="../links.html">Links</a></li>
+        <li><a href="../projects.html">Projects</a></li>
+    </ul>
+</div>
+
+        </nav>
+
+        <main role="main">
+            <h1>An Optimal Yahtzee Solver in Haskell</h1>
+            <article>
+    <section class="header">
+        Posted on November 14, 2025 · last updated: November 23, 2025
+        
+        <hr />
+    </section>
+    <section>
+        <div class="sourceCode" id="cb1"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="co">{- stack --resolver lts-23.24 script</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="co">   --package async --package binary</span></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="co">   --package containers --package deepseq</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a><span class="co">   --package directory --package mtl</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="co">   --package stm</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="co">   --compile</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="co">   --ghc-options -O2 </span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="co">   --ghc-options -threaded</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="co">   --ghc-options -rtsopts</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a><span class="co">   --</span></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a><span class="co">   +RTS -N -RTS</span></span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a><span class="co">-}</span></span></code></pre></div>
+<p>This post is a complete implementation of a program to find the optimal strategy for any given Yahtzee state, as described in James Glenn’s 2006 paper <a href="https://www.yahtzeemanifesto.com/an-optimal-strategy-for-yahtzee.pdf">“An Optimal Strategy for Yahtzee”</a>.
+It’s written in literate Haskell, so it’s been processed into an HTML file for viewing on the web, but you can download the <a href="./ysolver.lhs">raw file</a> and run it using <code>stack ysolver.lhs</code> (the options at the start of the file are passed to <code>stack</code>).</p>
+<p>I wrote it for three reasons:</p>
+<ol type="1">
+<li>My family plays a lot of Yahtzee and I was curious if my decision-making was anywhere near optimal.</li>
+<li>I wanted to practice writing Haskell.</li>
+<li>I enjoy literate programming.</li>
+</ol>
+<p>Originally, I thought Haskell was a perfect choice for this problem—“this is a mildly complex math problem, Haskell is math-driven language, using Haskell should make it easy to express the math.”
+I quickly received a reminder that you still need to know the limitations of the computer executing your program.
+Consider this program/blog post partly a record of me (re)learning these lessons the hard way and partly implementation notes for an interesting bit of math.</p>
+<h1 id="introduction">Introduction</h1>
+<p>I’m not going to repeat too much of Glenn’s mathematics—his paper is rather readable, and I would encourage you to read it for a full understanding of the algorithm at a conceptual level.
+Instead, I will be describing the Haskell implementation in painful detail—partly because it was painful for me to write (I’m not used to trying to write performant Haskell), partly because I learned some interesting lessons along the way.
+I tried my hardest to write clear and consistent code, but caveat emptor if you’re looking to it as an exemplar.</p>
+<p>First, let’s talk about some high level strategy.
+Glenn’s algorithm is pretty simple: every state in a Yahtzee game is represented in table.
+To find the ideal decision in any given state, calculate the expected score of each possible successor state; choose the decision that leads to the state with the highest expected score.
+If the player isn’t making a decision in the state—say, at the beginning of a turn—calculate the expected score of all possible successor states, weight them by their probabilities, and add the weighted scores together.
+Store each expected score in the table and keep track of the mapping of states to tables to avoid unnecessary recalculations.</p>
+<p>Naturally, our implementation will not be this simple.</p>
+<h2 id="imports">Imports</h2>
+<p>None of our dependencies are terribly exotic.
+We’ll be using standard data structures to store most of our data, though note that we’re using the strict version of a <code>Map</code> to map states to expected scores.
+Most of the time, Haskell’s lazy nature is going to work against us.</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.List</span> (sort, foldl')</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.Map.Strict</span> (<span class="dt">Map</span>)</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="kw">qualified</span> <span class="dt">Data.Map.Strict</span> <span class="kw">as</span> <span class="dt">Map</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.Word</span> (<span class="dt">Word16</span>, <span class="dt">Word32</span>)</span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.Bits</span></span></code></pre></div>
+<p>The <code>System</code> and <code>Data.Binary</code> dependencies combine to serialize data and store our table when we’re done calculating it.</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.IO</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">System.Directory</span> (doesFileExist)</span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Data.Binary</span> (<span class="dt">Binary</span>, encode, decode, put, get, encodeFile, decodeFile)</span></code></pre></div>
+<p>Finally, we use various <code>Control</code> packages to handle concurrency.</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Concurrent.STM</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Concurrent</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.Concurrent.Async</span> (mapConcurrently)</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="kw">import</span> <span class="dt">Control.DeepSeq</span> (force)</span></code></pre></div>
+<h1 id="type-definitions">Type Definitions</h1>
+<p>With the preliminaries out of the way, let’s start by defining our representations of a Yahtzee game.
+There is a bit of a balancing act between providing clear abstractions and maintaining performant code.</p>
+<h2 id="scorecard">Scorecard</h2>
+<p>Let’s start with an easy one: our Yahtzee categories are defined as an <code>enum</code>, with various useful typeclasses derived for us.</p>
+<div class="sourceCode" id="cb5"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">Category</span> <span class="ot">=</span> <span class="dt">Ones</span> <span class="op">|</span> <span class="dt">Twos</span> <span class="op">|</span> <span class="dt">Threes</span> <span class="op">|</span> <span class="dt">Fours</span> <span class="op">|</span> <span class="dt">Fives</span> <span class="op">|</span> <span class="dt">Sixes</span></span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="dt">ThreeKind</span> <span class="op">|</span> <span class="dt">FourKind</span> <span class="op">|</span> <span class="dt">FullHouse</span> <span class="op">|</span> <span class="dt">SmStraight</span> <span class="op">|</span> <span class="dt">LgStraight</span></span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="dt">Yahtzee</span> <span class="op">|</span> <span class="dt">Chance</span></span>
+<span id="cb5-4"><a href="#cb5-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Show</span>, <span class="dt">Enum</span>, <span class="dt">Bounded</span>)</span></code></pre></div>
+<p>The <code>Bounded</code> typeclass helps us collect all of our categories into a list.</p>
+<div class="sourceCode" id="cb6"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ot">allCats ::</span> [<span class="dt">Category</span>]</span>
+<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a>allCats <span class="ot">=</span> [<span class="fu">minBound</span> <span class="op">..</span> <span class="fu">maxBound</span>]</span></code></pre></div>
+<p>And the <code>Ord</code> typeclass helps us tell if a category is in the upper section or not.</p>
+<div class="sourceCode" id="cb7"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ot">isUpperCat ::</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>isUpperCat c <span class="ot">=</span> c <span class="op">&lt;=</span> <span class="dt">Sixes</span></span></code></pre></div>
+<p>Representing a scorecard is simple because we don’t need to store the scores at any given time; we just need to store whether the category is used or not.
+Thirteen categories and one bit of information per category means we can fit our scorecard into a 16-bit word.</p>
+<div class="sourceCode" id="cb8"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="kw">newtype</span> <span class="dt">Scorecard</span> <span class="ot">=</span> <span class="dt">Scorecard</span> <span class="dt">Word16</span> <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Show</span>)</span></code></pre></div>
+<p>No, I did not default to squeezing types into bitmaps.
+Originally, I defined a scorecard far more intuitively: <code>newtype Scorecard = Scorecard (Map Category Bool)</code>.
+But after completing the first version of my program, I found it to be unbearably slow—calculating even “easy” decisions (with 4–5 categories blank) took nearly an hour.
+One of the bottlenecks was comparing various aspects of a state when checking if I had already calculated the expected score for a given state, including comparing different Scorecards.
+(Have we already calculated the optimal decision for a state?
+Well, we have to check if the state is equal to other states: does it have the same scorecard, the same dice roll, etc.)
+It is unsurprisingly <em>much</em> faster to compare two 16-bit words than to compare two full <code>Map</code> structures.</p>
+<p>Thankfully, we can hide most of our bit flipping in the various helper functions to manipulate <code>Scorecard</code>s.
+Converting from the category <code>enum</code> to the correct bit is also smoother than you might expect.</p>
+<div class="sourceCode" id="cb9"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ot">isFull ::</span> <span class="dt">Scorecard</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb9-2"><a href="#cb9-2" aria-hidden="true" tabindex="-1"></a>isFull (<span class="dt">Scorecard</span> w) <span class="ot">=</span> w <span class="op">==</span> <span class="bn">0x1FFF</span>  <span class="co">-- All 13 bits set (2^13 - 1)</span></span>
+<span id="cb9-3"><a href="#cb9-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-4"><a href="#cb9-4" aria-hidden="true" tabindex="-1"></a><span class="ot">isUsed ::</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">Scorecard</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb9-5"><a href="#cb9-5" aria-hidden="true" tabindex="-1"></a>isUsed cat (<span class="dt">Scorecard</span> w) <span class="ot">=</span> testBit w (<span class="fu">fromEnum</span> cat)</span>
+<span id="cb9-6"><a href="#cb9-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-7"><a href="#cb9-7" aria-hidden="true" tabindex="-1"></a><span class="ot">emptyCats ::</span> <span class="dt">Scorecard</span> <span class="ot">-&gt;</span> [<span class="dt">Category</span>]</span>
+<span id="cb9-8"><a href="#cb9-8" aria-hidden="true" tabindex="-1"></a>emptyCats card <span class="ot">=</span> [c <span class="op">|</span> c <span class="ot">&lt;-</span> allCats, <span class="fu">not</span> (isUsed c card)]</span>
+<span id="cb9-9"><a href="#cb9-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-10"><a href="#cb9-10" aria-hidden="true" tabindex="-1"></a>fill,<span class="ot"> unfill ::</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">Scorecard</span> <span class="ot">-&gt;</span> <span class="dt">Scorecard</span></span>
+<span id="cb9-11"><a href="#cb9-11" aria-hidden="true" tabindex="-1"></a>fill cat (<span class="dt">Scorecard</span> w) <span class="ot">=</span> <span class="dt">Scorecard</span> (setBit w (<span class="fu">fromEnum</span> cat))</span>
+<span id="cb9-12"><a href="#cb9-12" aria-hidden="true" tabindex="-1"></a>unfill cat (<span class="dt">Scorecard</span> w) <span class="ot">=</span> <span class="dt">Scorecard</span> (clearBit w (<span class="fu">fromEnum</span> cat))</span>
+<span id="cb9-13"><a href="#cb9-13" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb9-14"><a href="#cb9-14" aria-hidden="true" tabindex="-1"></a>emptycard,<span class="ot"> fullcard ::</span> <span class="dt">Scorecard</span></span>
+<span id="cb9-15"><a href="#cb9-15" aria-hidden="true" tabindex="-1"></a>emptycard <span class="ot">=</span> <span class="dt">Scorecard</span> <span class="dv">0</span></span>
+<span id="cb9-16"><a href="#cb9-16" aria-hidden="true" tabindex="-1"></a>fullcard <span class="ot">=</span> <span class="dt">Scorecard</span> <span class="bn">0x1FFF</span></span></code></pre></div>
+<h2 id="dice-rolls">Dice Rolls</h2>
+<p>Dice rolls are represented as “multisets,” or more colloquially, “bags.”
+A multiset is a set—in that it’s unordered—but it allows multiple occurrences of the same value.
+They are usually implemented as a number of keys with an occurrence count attached to each value.
+A <a href="https://hackage.haskell.org/package/multiset-0.3.4.3/docs/Data-IntMultiSet.html">MultiSet implementation</a> is available on Hackage, but during testing, I ran into the same problem I did with <code>Scorecard</code>s: comparing complex data structures to each other is slow.
+Instead, our dice roll is similarly squeezed into a bitmap, though a multiset-inspired one.</p>
+<div class="sourceCode" id="cb10"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 0-2: count of 1s (0-5)</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 3-5: count of 2s (0-5)</span></span>
+<span id="cb10-3"><a href="#cb10-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 6-8: count of 3s (0-5)</span></span>
+<span id="cb10-4"><a href="#cb10-4" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 9-11: count of 4s (0-5)</span></span>
+<span id="cb10-5"><a href="#cb10-5" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 12-14: count of 5s (0-5)</span></span>
+<span id="cb10-6"><a href="#cb10-6" aria-hidden="true" tabindex="-1"></a><span class="co">-- Bits 15-17: count of 6s (0-5)</span></span>
+<span id="cb10-7"><a href="#cb10-7" aria-hidden="true" tabindex="-1"></a><span class="kw">newtype</span> <span class="dt">Roll</span> <span class="ot">=</span> <span class="dt">Roll</span> <span class="dt">Word32</span> <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Show</span>)</span>
+<span id="cb10-8"><a href="#cb10-8" aria-hidden="true" tabindex="-1"></a><span class="ot">emptyRoll ::</span> <span class="dt">Roll</span></span>
+<span id="cb10-9"><a href="#cb10-9" aria-hidden="true" tabindex="-1"></a>emptyRoll <span class="ot">=</span> <span class="dt">Roll</span> <span class="dv">0</span></span></code></pre></div>
+<p><img src="../images/dice-bitmap-transparent.svg" alt="Sample dice bitmap representation" /><br />
+</p>
+<h3 id="manipulating-dice-rolls">Manipulating Dice Rolls</h3>
+<p>However, its helper functions are significantly trickier—in part because we go out of our way to make sure they mostly reduce to flipping and shifting bits.
+That means resisting the urge to build lists or other intermediate data structures.
+Most of the dice roll functions are inlined due to how often we manipulate dice rolls in the course of our calculations.
+I defend myself against charges of premature optimization by noting that I did profile and measure first before resorting to bitflipping.</p>
+<div class="sourceCode" id="cb11"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb11-1"><a href="#cb11-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Get count of a specific die face</span></span>
+<span id="cb11-2"><a href="#cb11-2" aria-hidden="true" tabindex="-1"></a><span class="ot">occur ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Int</span></span>
+<span id="cb11-3"><a href="#cb11-3" aria-hidden="true" tabindex="-1"></a>occur face (<span class="dt">Roll</span> w)</span>
+<span id="cb11-4"><a href="#cb11-4" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> face <span class="op">&lt;</span> <span class="dv">1</span> <span class="op">||</span> face <span class="op">&gt;</span> <span class="dv">6</span> <span class="ot">=</span> <span class="fu">error</span> <span class="op">$</span> <span class="st">&quot;trying to set die face out of bounds: &quot;</span> <span class="op">++</span> <span class="fu">show</span> face</span></code></pre></div>
+<p>Note that here (and for the rest of this family of functions), we choose to throw an error on invalid input.
+We control all calls of these functions, so any invalid input means we’ve made a programmers’ mistake.</p>
+<p>The basic pattern for most of these functions is extracting the three bits used to count the ocurrences of each die face and manipulating them, in the form of <code>(face-1) * 3</code>, which finds the correct bit index for a given face.</p>
+<div class="sourceCode" id="cb12"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb12-1"><a href="#cb12-1" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="fu">fromIntegral</span> <span class="op">$</span> (w <span class="ot">`shiftR`</span> ((face <span class="op">-</span> <span class="dv">1</span>) <span class="op">*</span> <span class="dv">3</span>)) <span class="op">.&amp;.</span> <span class="bn">0x7</span></span>
+<span id="cb12-2"><a href="#cb12-2" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# INLINE occur #-}</span></span>
+<span id="cb12-3"><a href="#cb12-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb12-4"><a href="#cb12-4" aria-hidden="true" tabindex="-1"></a><span class="co">-- Set the occurrence of a specific die face</span></span>
+<span id="cb12-5"><a href="#cb12-5" aria-hidden="true" tabindex="-1"></a><span class="ot">setOccur ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span></span>
+<span id="cb12-6"><a href="#cb12-6" aria-hidden="true" tabindex="-1"></a>setOccur face count (<span class="dt">Roll</span> w)</span>
+<span id="cb12-7"><a href="#cb12-7" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> face <span class="op">&lt;</span> <span class="dv">1</span> <span class="op">||</span> face <span class="op">&gt;</span> <span class="dv">6</span> <span class="ot">=</span> <span class="fu">error</span> <span class="op">$</span> <span class="st">&quot;trying to set die face out of bounds: &quot;</span> <span class="op">++</span> <span class="fu">show</span> face</span>
+<span id="cb12-8"><a href="#cb12-8" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> count <span class="op">&lt;</span> <span class="dv">0</span> <span class="op">||</span> count <span class="op">&gt;</span> <span class="dv">5</span> <span class="ot">=</span> <span class="fu">error</span> <span class="op">$</span> <span class="st">&quot;trying to set face occurs out of bounds: &quot;</span> <span class="op">++</span> <span class="fu">show</span> count</span>
+<span id="cb12-9"><a href="#cb12-9" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span></span>
+<span id="cb12-10"><a href="#cb12-10" aria-hidden="true" tabindex="-1"></a>      <span class="kw">let</span> mask <span class="ot">=</span> complement (<span class="bn">0x7</span> <span class="ot">`shiftL`</span> ((face <span class="op">-</span> <span class="dv">1</span>) <span class="op">*</span> <span class="dv">3</span>))</span>
+<span id="cb12-11"><a href="#cb12-11" aria-hidden="true" tabindex="-1"></a>          cleared <span class="ot">=</span> w <span class="op">.&amp;.</span> mask</span>
+<span id="cb12-12"><a href="#cb12-12" aria-hidden="true" tabindex="-1"></a>          newBits <span class="ot">=</span> (<span class="fu">fromIntegral</span> count <span class="op">.&amp;.</span> <span class="bn">0x7</span>) <span class="ot">`shiftL`</span> ((face <span class="op">-</span> <span class="dv">1</span>) <span class="op">*</span> <span class="dv">3</span>)</span>
+<span id="cb12-13"><a href="#cb12-13" aria-hidden="true" tabindex="-1"></a>       <span class="kw">in</span> <span class="dt">Roll</span> (cleared <span class="op">.|.</span> newBits)</span>
+<span id="cb12-14"><a href="#cb12-14" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# INLINE setOccur #-}</span></span></code></pre></div>
+<p><code>occur</code> and <code>setOccur</code> are both comparatively simple.
+<code>unionRoll</code>, on the other hand, is a bit messy, as what normally would have been expressed more concisely is “unrolled” for the sake of ensuring it reduces down to solely bitflipping.
+An idiomatic Haskell implementation would have used some recursion and intermediate data structures.</p>
+<div class="sourceCode" id="cb13"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb13-1"><a href="#cb13-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Combine two rolls (add their counts)</span></span>
+<span id="cb13-2"><a href="#cb13-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- Used for when we rolled a subset of dice and we want to combine the new roll</span></span>
+<span id="cb13-3"><a href="#cb13-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- with the saved dice.</span></span>
+<span id="cb13-4"><a href="#cb13-4" aria-hidden="true" tabindex="-1"></a><span class="ot">unionRoll ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span></span>
+<span id="cb13-5"><a href="#cb13-5" aria-hidden="true" tabindex="-1"></a>unionRoll (<span class="dt">Roll</span> w1) (<span class="dt">Roll</span> w2) <span class="ot">=</span> <span class="dt">Roll</span> <span class="op">$</span></span>
+<span id="cb13-6"><a href="#cb13-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> add shift <span class="ot">=</span> <span class="fu">min</span> <span class="dv">5</span> (((w1 <span class="ot">`shiftR`</span> shift) <span class="op">.&amp;.</span> <span class="bn">0x7</span>) <span class="op">+</span> ((w2 <span class="ot">`shiftR`</span> shift) <span class="op">.&amp;.</span> <span class="bn">0x7</span>)) <span class="ot">`shiftL`</span> shift</span>
+<span id="cb13-7"><a href="#cb13-7" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> add <span class="dv">0</span> <span class="op">.|.</span> add <span class="dv">3</span> <span class="op">.|.</span> add <span class="dv">6</span> <span class="op">.|.</span> add <span class="dv">9</span> <span class="op">.|.</span> add <span class="dv">12</span> <span class="op">.|.</span> add <span class="dv">15</span></span>
+<span id="cb13-8"><a href="#cb13-8" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# INLINE unionRoll #-}</span></span></code></pre></div>
+<p>The rest of the dice roll functions can be written more idiomatically using the more low-level functions.</p>
+<div class="sourceCode" id="cb14"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb14-1"><a href="#cb14-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Total number of dice in the roll</span></span>
+<span id="cb14-2"><a href="#cb14-2" aria-hidden="true" tabindex="-1"></a><span class="ot">rollSize ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Int</span></span>
+<span id="cb14-3"><a href="#cb14-3" aria-hidden="true" tabindex="-1"></a>rollSize roll <span class="ot">=</span> <span class="fu">sum</span> [occur i roll <span class="op">|</span> i <span class="ot">&lt;-</span> [<span class="dv">1</span><span class="op">..</span><span class="dv">6</span>]]</span>
+<span id="cb14-4"><a href="#cb14-4" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# INLINE rollSize #-}</span></span>
+<span id="cb14-5"><a href="#cb14-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-6"><a href="#cb14-6" aria-hidden="true" tabindex="-1"></a><span class="co">-- Get list of distinct die faces present</span></span>
+<span id="cb14-7"><a href="#cb14-7" aria-hidden="true" tabindex="-1"></a><span class="ot">distinctFaces ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> [<span class="dt">Int</span>]</span>
+<span id="cb14-8"><a href="#cb14-8" aria-hidden="true" tabindex="-1"></a>distinctFaces roll <span class="ot">=</span> [i <span class="op">|</span> i <span class="ot">&lt;-</span> [<span class="dv">1</span><span class="op">..</span><span class="dv">6</span>], occur i roll <span class="op">&gt;</span> <span class="dv">0</span>]</span>
+<span id="cb14-9"><a href="#cb14-9" aria-hidden="true" tabindex="-1"></a><span class="ot">{-# INLINE distinctFaces #-}</span></span>
+<span id="cb14-10"><a href="#cb14-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-11"><a href="#cb14-11" aria-hidden="true" tabindex="-1"></a><span class="co">-- A roll with one die</span></span>
+<span id="cb14-12"><a href="#cb14-12" aria-hidden="true" tabindex="-1"></a><span class="ot">singletonRoll ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span></span>
+<span id="cb14-13"><a href="#cb14-13" aria-hidden="true" tabindex="-1"></a>singletonRoll face <span class="ot">=</span> setOccur face <span class="dv">1</span> emptyRoll</span>
+<span id="cb14-14"><a href="#cb14-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-15"><a href="#cb14-15" aria-hidden="true" tabindex="-1"></a><span class="co">-- Convert a list of faces into a roll</span></span>
+<span id="cb14-16"><a href="#cb14-16" aria-hidden="true" tabindex="-1"></a><span class="ot">listToRoll ::</span> [<span class="dt">Int</span>] <span class="ot">-&gt;</span> <span class="dt">Roll</span></span>
+<span id="cb14-17"><a href="#cb14-17" aria-hidden="true" tabindex="-1"></a>listToRoll faces <span class="ot">=</span> foldl' unionRoll emptyRoll singles</span>
+<span id="cb14-18"><a href="#cb14-18" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span> singles <span class="ot">=</span> <span class="fu">map</span> singletonRoll faces</span>
+<span id="cb14-19"><a href="#cb14-19" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb14-20"><a href="#cb14-20" aria-hidden="true" tabindex="-1"></a><span class="co">-- Convert a list of faces into a roll, checking that the roll is complete (five dice)</span></span>
+<span id="cb14-21"><a href="#cb14-21" aria-hidden="true" tabindex="-1"></a><span class="ot">listToFullRoll ::</span> [<span class="dt">Int</span>] <span class="ot">-&gt;</span> <span class="dt">Roll</span></span>
+<span id="cb14-22"><a href="#cb14-22" aria-hidden="true" tabindex="-1"></a>listToFullRoll l</span>
+<span id="cb14-23"><a href="#cb14-23" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">length</span> l <span class="op">/=</span> <span class="dv">5</span> <span class="ot">=</span> <span class="fu">error</span> <span class="st">&quot;dice rolls must be five dice&quot;</span></span>
+<span id="cb14-24"><a href="#cb14-24" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> listToRoll l</span></code></pre></div>
+<h3 id="dice-combinations">Dice Combinations</h3>
+<p>A large part of calculating an expected score is generating lists of possible dice combinations (and their probabilities).
+These functions manipulate <code>Roll</code>s but are mostly high level enough to not need to directly flip any bits.</p>
+<p>The problem where we have a set of <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>n</mi><annotation encoding="application/x-tex">n</annotation></semantics></math> elements and we want to choose <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math> elements from the set is called “n choose k” problem, or the <a href="https://en.wikipedia.org/wiki/Binomial_coefficient">binomial coefficient</a>.
+Since we are allowed to choose combinations <em>with</em> repetition, we use a variant—the <a href="https://en.wikipedia.org/wiki/Multiset#Counting_multisets">multiset coefficient</a>.
+When rolling dice we have six possible faces per die (<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>n</mi><mo>=</mo><mn>6</mn></mrow><annotation encoding="application/x-tex">n=6</annotation></semantics></math>) and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math> is the number of dice we are rolling.</p>
+<div class="sourceCode" id="cb15"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb15-1"><a href="#cb15-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Given the number of dice to roll, generate a list of all possible rolls.</span></span>
+<span id="cb15-2"><a href="#cb15-2" aria-hidden="true" tabindex="-1"></a><span class="ot">sixChooseK ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> [<span class="dt">Roll</span>]</span>
+<span id="cb15-3"><a href="#cb15-3" aria-hidden="true" tabindex="-1"></a>sixChooseK k <span class="ot">=</span> <span class="fu">map</span> listToRoll (choose k [<span class="dv">1</span><span class="op">..</span><span class="dv">6</span>])</span>
+<span id="cb15-4"><a href="#cb15-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb15-5"><a href="#cb15-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">-- choose generates the list of combinations</span></span>
+<span id="cb15-6"><a href="#cb15-6" aria-hidden="true" tabindex="-1"></a><span class="ot">    choose ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> [a] <span class="ot">-&gt;</span> [[a]]</span>
+<span id="cb15-7"><a href="#cb15-7" aria-hidden="true" tabindex="-1"></a>    choose <span class="dv">0</span> _  <span class="ot">=</span> [[]]</span>
+<span id="cb15-8"><a href="#cb15-8" aria-hidden="true" tabindex="-1"></a>    choose _ [] <span class="ot">=</span> []</span>
+<span id="cb15-9"><a href="#cb15-9" aria-hidden="true" tabindex="-1"></a>    choose k (x<span class="op">:</span>xs)</span>
+<span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>      <span class="op">|</span> k <span class="op">&lt;</span> <span class="dv">0</span>     <span class="ot">=</span> []</span>
+<span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>      <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="fu">map</span> (x<span class="op">:</span>) (choose (k<span class="op">-</span><span class="dv">1</span>) (x<span class="op">:</span>xs)) <span class="op">++</span> (choose k xs)</span></code></pre></div>
+<p>Now, what are the odds of rolling a given dice roll?
+This is simple to calculate: divide the <a href="https://en.wikipedia.org/wiki/Multinomial_theorem">multinomial coefficient</a> by the number of outcomes per die (6) raised to the number of dice rolled.
+If <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math> is the number of dice rolled, and <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>o</mi><mi>f</mi></msub><annotation encoding="application/x-tex">o_f</annotation></semantics></math> is the number of occurrences for a distinct face <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>f</mi><annotation encoding="application/x-tex">f</annotation></semantics></math>:</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mtable><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"><mrow><mo stretchy="true" form="prefix">(</mo><mfrac linethickness="0"><mi>k</mi><msub><mi>o</mi><mn>6</mn></msub></mfrac><mo stretchy="true" form="postfix">)</mo></mrow></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><mfrac><mrow><mi>k</mi><mi>!</mi></mrow><mrow><munderover><mo>∏</mo><mrow><mi>f</mi><mo>=</mo><mn>1</mn></mrow><mn>6</mn></munderover><msub><mi>o</mi><mi>f</mi></msub><mi>!</mi></mrow></mfrac><mrow><mspace width="0.333em"></mspace><mtext mathvariant="normal"> (the multinomial coefficient)</mtext></mrow></mtd></mtr><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"></mtd></mtr><mtr><mtd columnalign="right" style="text-align: right; padding-right: 0"><mi>P</mi><mo stretchy="false" form="prefix">{</mo><mtext mathvariant="normal">roll</mtext><mo stretchy="false" form="postfix">}</mo></mtd><mtd columnalign="left" style="text-align: left; padding-left: 0"><mo>=</mo><mfrac><mrow><mo stretchy="true" form="prefix">(</mo><mfrac linethickness="0"><mi>k</mi><msub><mi>o</mi><mn>6</mn></msub></mfrac><mo stretchy="true" form="postfix">)</mo></mrow><msup><mn>6</mn><mi>k</mi></msup></mfrac></mtd></mtr></mtable><annotation encoding="application/x-tex">
+\begin{align}
+{k\choose o_6}&amp;= \frac{k!}{\prod_{f=1}^6 o_f!} \text{ (the multinomial coefficient)} \\
+\\
+P\{\text{roll}\} &amp;= \frac{k\choose o_6}{6^k}
+\end{align}
+</annotation></semantics></math></p>
+<p>And in code:</p>
+<div class="sourceCode" id="cb16"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb16-1"><a href="#cb16-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Given a roll, return the odds of achieving that roll</span></span>
+<span id="cb16-2"><a href="#cb16-2" aria-hidden="true" tabindex="-1"></a><span class="ot">rollOdds ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Double</span></span>
+<span id="cb16-3"><a href="#cb16-3" aria-hidden="true" tabindex="-1"></a>rollOdds roll <span class="ot">=</span> <span class="fu">fromIntegral</span> multinomial <span class="op">/</span> <span class="fu">fromIntegral</span> (<span class="dv">6</span> <span class="op">^</span> rollSize roll)</span>
+<span id="cb16-4"><a href="#cb16-4" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb16-5"><a href="#cb16-5" aria-hidden="true" tabindex="-1"></a>    <span class="co">-- Precomputed factorials because we know n &lt; 6</span></span>
+<span id="cb16-6"><a href="#cb16-6" aria-hidden="true" tabindex="-1"></a>    factorial n <span class="op">|</span> n <span class="op">&lt;</span> <span class="dv">6</span> <span class="ot">=</span> [<span class="dv">1</span>, <span class="dv">1</span>, <span class="dv">2</span>, <span class="dv">6</span>, <span class="dv">24</span>, <span class="dv">120</span>] <span class="op">!!</span> n</span>
+<span id="cb16-7"><a href="#cb16-7" aria-hidden="true" tabindex="-1"></a>    factorial n <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="fu">error</span> <span class="op">$</span> <span class="fu">show</span> n <span class="op">++</span> <span class="st">&quot;! is not precomputed&quot;</span></span>
+<span id="cb16-8"><a href="#cb16-8" aria-hidden="true" tabindex="-1"></a>    occurs <span class="ot">=</span> <span class="fu">map</span> (\k <span class="ot">-&gt;</span> occur k roll) (distinctFaces roll)</span>
+<span id="cb16-9"><a href="#cb16-9" aria-hidden="true" tabindex="-1"></a>    multinomial <span class="ot">=</span></span>
+<span id="cb16-10"><a href="#cb16-10" aria-hidden="true" tabindex="-1"></a>      factorial (rollSize roll) <span class="ot">`div`</span></span>
+<span id="cb16-11"><a href="#cb16-11" aria-hidden="true" tabindex="-1"></a>      <span class="fu">product</span> [factorial o <span class="op">|</span> o <span class="ot">&lt;-</span> occurs]</span></code></pre></div>
+<p>After defining the initial combination functions, we immediately go back to trying to eke out some performance wins.
+We know that we’ll never roll more than five dice, so we can just precompute all the possible dice combinations as well as their odds.</p>
+<div class="sourceCode" id="cb17"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb17-1"><a href="#cb17-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Precompute all possible combinations of rolling any number of dice.</span></span>
+<span id="cb17-2"><a href="#cb17-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- and the odds of getting that roll.</span></span>
+<span id="cb17-3"><a href="#cb17-3" aria-hidden="true" tabindex="-1"></a><span class="co">-- This is a total of 6 + 21 + 56 + 126 + 252 + 462 = 923 rolls</span></span>
+<span id="cb17-4"><a href="#cb17-4" aria-hidden="true" tabindex="-1"></a><span class="ot">completeRollListWithOdds ::</span> [[(<span class="dt">Roll</span>, <span class="dt">Double</span>)]]</span>
+<span id="cb17-5"><a href="#cb17-5" aria-hidden="true" tabindex="-1"></a>completeRollListWithOdds <span class="ot">=</span> <span class="fu">map</span> collectRollOdds allRolls</span>
+<span id="cb17-6"><a href="#cb17-6" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb17-7"><a href="#cb17-7" aria-hidden="true" tabindex="-1"></a>    collectRollOdds rolls <span class="ot">=</span> [(r, rollOdds r) <span class="op">|</span> r <span class="ot">&lt;-</span> rolls]</span>
+<span id="cb17-8"><a href="#cb17-8" aria-hidden="true" tabindex="-1"></a>    allRolls <span class="ot">=</span> <span class="fu">map</span> sixChooseK [<span class="dv">1</span><span class="op">..</span><span class="dv">5</span>]</span>
+<span id="cb17-9"><a href="#cb17-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb17-10"><a href="#cb17-10" aria-hidden="true" tabindex="-1"></a><span class="co">-- This is just a convenient name to make future code read more nicely.</span></span>
+<span id="cb17-11"><a href="#cb17-11" aria-hidden="true" tabindex="-1"></a><span class="co">-- Most of the time, we'll use completeRollListWithOdds !! k to get all the</span></span>
+<span id="cb17-12"><a href="#cb17-12" aria-hidden="true" tabindex="-1"></a><span class="co">-- possible dice combinations and the odds of each from rolling k dice.</span></span>
+<span id="cb17-13"><a href="#cb17-13" aria-hidden="true" tabindex="-1"></a>rollFiveDice <span class="ot">=</span> completeRollListWithOdds <span class="op">!!</span> <span class="dv">4</span></span></code></pre></div>
+<p>Lastly, we have all the possible combinations of rolling dice… what about the possible combinations of <em>keeping</em> them?
+We don’t have any standard formulas for this, so Glenn provides the logic for finding all possible dice combinations we can keep from a given roll.</p>
+<p>For each distinct number in our dice roll, we can choose to keep 0–n dice; i.e., if we have rolled three 2s, we can choose to keep none of them, one 2, two 2s, or all three 2s.
+Then we combine each of those options with the options for all the other distinct numbers; i.e., if we have rolled two 1s to go along with our three 2s, we can keep zero 2s and zero 1s (reroll everything), or zero 2s and one 1, or zero 2s and two 1s, or one 2 and zero ones, etc., etc.</p>
+<div class="sourceCode" id="cb18"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb18-1"><a href="#cb18-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Given a roll generate all the possible ways we can keep a subset of the dice</span></span>
+<span id="cb18-2"><a href="#cb18-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- excluding keeping the entire roll.</span></span>
+<span id="cb18-3"><a href="#cb18-3" aria-hidden="true" tabindex="-1"></a><span class="ot">keepCombinations ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> [<span class="dt">Roll</span>]</span>
+<span id="cb18-4"><a href="#cb18-4" aria-hidden="true" tabindex="-1"></a>keepCombinations roll</span>
+<span id="cb18-5"><a href="#cb18-5" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> rollSize roll <span class="op">==</span> <span class="dv">0</span> <span class="ot">=</span> []</span>
+<span id="cb18-6"><a href="#cb18-6" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span></span></code></pre></div>
+<p>Reading from in to out:
+<code>mapM</code> (instead of <code>map</code>) ensures we get a list of all combinations instead of a list of length <code>distinctFaces</code>.
+Then we have a list of combinations, but each combination is itself a list of rolls; we want to collapse each combination into a single roll with the fold call.
+Finally, the filter excludes keeping all the dice from our list—keeping all the dice is equivalent to ending the turn and scoring the current roll in a category, which we’ll handle elsewhere.</p>
+<div class="sourceCode" id="cb19"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb19-1"><a href="#cb19-1" aria-hidden="true" tabindex="-1"></a>    <span class="fu">filter</span> (\r <span class="ot">-&gt;</span> rollSize r <span class="op">&lt;</span> rollSize roll)</span>
+<span id="cb19-2"><a href="#cb19-2" aria-hidden="true" tabindex="-1"></a>      (<span class="fu">map</span> (<span class="fu">foldl</span> unionRoll emptyRoll) <span class="op">$</span></span>
+<span id="cb19-3"><a href="#cb19-3" aria-hidden="true" tabindex="-1"></a>        <span class="fu">mapM</span> (decomposeFaces roll) (distinctFaces roll))</span>
+<span id="cb19-4"><a href="#cb19-4" aria-hidden="true" tabindex="-1"></a>    <span class="kw">where</span></span>
+<span id="cb19-5"><a href="#cb19-5" aria-hidden="true" tabindex="-1"></a><span class="ot">      decomposeFaces ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> [<span class="dt">Roll</span>]</span></code></pre></div>
+<p><code>decomposeFaces</code> provides all the options for each distinct element (zero 2s, one 2, two 2s, etc.). We represent keeping 0 with an empty roll.</p>
+<div class="sourceCode" id="cb20"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb20-1"><a href="#cb20-1" aria-hidden="true" tabindex="-1"></a>      decomposeFaces r f <span class="ot">=</span></span>
+<span id="cb20-2"><a href="#cb20-2" aria-hidden="true" tabindex="-1"></a>        emptyRoll <span class="op">:</span> [setOccur f i emptyRoll <span class="op">|</span> i <span class="ot">&lt;-</span> [<span class="dv">1</span> <span class="op">..</span> occur f r]]</span></code></pre></div>
+<h2 id="turns">Turns</h2>
+<p>Working with dice took a fair amount of time and brief foray into combinatorics.
+Let’s finish our representation of a Yahtzee game.</p>
+<div class="sourceCode" id="cb21"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">YTurn</span> <span class="ot">=</span> <span class="dt">YTurn</span> {<span class="ot"> rerolls ::</span> <span class="dt">Int</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a>                   ,<span class="ot"> roll ::</span> <span class="dt">Roll</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>                   } <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Show</span>)</span></code></pre></div>
+<p>Our types are getting simpler!
+A <code>YTurn</code> is the number of rerolls we have left and the current roll.
+(If the number of rerolls is 3—i.e., we’re a the beginning of a turn—then the current roll is ignored.)</p>
+<div class="sourceCode" id="cb22"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb22-1"><a href="#cb22-1" aria-hidden="true" tabindex="-1"></a><span class="ot">isEnd ::</span> <span class="dt">YTurn</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb22-2"><a href="#cb22-2" aria-hidden="true" tabindex="-1"></a>isEnd turn  <span class="ot">=</span> rerolls turn <span class="op">==</span> <span class="dv">0</span></span>
+<span id="cb22-3"><a href="#cb22-3" aria-hidden="true" tabindex="-1"></a><span class="ot">isMid ::</span> <span class="dt">YTurn</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb22-4"><a href="#cb22-4" aria-hidden="true" tabindex="-1"></a>isMid turn <span class="ot">=</span> (rerolls turn <span class="op">&gt;</span> <span class="dv">0</span>) <span class="op">&amp;&amp;</span> (rerolls turn <span class="op">&lt;</span> <span class="dv">3</span>)</span>
+<span id="cb22-5"><a href="#cb22-5" aria-hidden="true" tabindex="-1"></a><span class="ot">isBegin ::</span> <span class="dt">YTurn</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb22-6"><a href="#cb22-6" aria-hidden="true" tabindex="-1"></a>isBegin turn <span class="ot">=</span> rerolls turn <span class="op">==</span> <span class="dv">3</span></span>
+<span id="cb22-7"><a href="#cb22-7" aria-hidden="true" tabindex="-1"></a><span class="ot">newTurn ::</span> <span class="dt">YTurn</span></span>
+<span id="cb22-8"><a href="#cb22-8" aria-hidden="true" tabindex="-1"></a>newTurn <span class="ot">=</span> <span class="dt">YTurn</span> { rerolls <span class="ot">=</span> <span class="dv">3</span>, roll <span class="ot">=</span> emptyRoll }</span></code></pre></div>
+<h2 id="gamestates">Gamestates</h2>
+<p>We are almost ready to write out our complete state type.</p>
+<div class="sourceCode" id="cb23"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> <span class="dt">UpperTotal</span> <span class="ot">=</span> <span class="dt">Int</span></span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> <span class="dt">YBonus</span> <span class="ot">=</span> <span class="dt">Bool</span></span></code></pre></div>
+<p>There are two stray pieces of state, besides the scorecard and the dice roll, that we care about—the current total of the upper part of our scorecard (since it affects the bonus at the end of the game) and whether the next Yahtzee earns a 100-point bonus.</p>
+<div class="sourceCode" id="cb24"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb24-1"><a href="#cb24-1" aria-hidden="true" tabindex="-1"></a><span class="kw">data</span> <span class="dt">YState</span> <span class="ot">=</span> <span class="dt">YState</span> {<span class="ot"> card ::</span> <span class="dt">Scorecard</span></span>
+<span id="cb24-2"><a href="#cb24-2" aria-hidden="true" tabindex="-1"></a>                     ,<span class="ot"> uptotal ::</span> <span class="dt">UpperTotal</span></span>
+<span id="cb24-3"><a href="#cb24-3" aria-hidden="true" tabindex="-1"></a>                     ,<span class="ot"> bonus ::</span> <span class="dt">YBonus</span></span>
+<span id="cb24-4"><a href="#cb24-4" aria-hidden="true" tabindex="-1"></a>                     ,<span class="ot"> turn ::</span> <span class="dt">YTurn</span></span>
+<span id="cb24-5"><a href="#cb24-5" aria-hidden="true" tabindex="-1"></a>                     } <span class="kw">deriving</span> (<span class="dt">Eq</span>, <span class="dt">Ord</span>, <span class="dt">Show</span>)</span>
+<span id="cb24-6"><a href="#cb24-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb24-7"><a href="#cb24-7" aria-hidden="true" tabindex="-1"></a><span class="ot">newgame ::</span> <span class="dt">YState</span></span>
+<span id="cb24-8"><a href="#cb24-8" aria-hidden="true" tabindex="-1"></a>newgame <span class="ot">=</span> <span class="dt">YState</span> { card <span class="ot">=</span> emptycard</span>
+<span id="cb24-9"><a href="#cb24-9" aria-hidden="true" tabindex="-1"></a>                 , uptotal <span class="ot">=</span>  <span class="dv">0</span></span>
+<span id="cb24-10"><a href="#cb24-10" aria-hidden="true" tabindex="-1"></a>                 , bonus <span class="ot">=</span> <span class="dt">False</span></span>
+<span id="cb24-11"><a href="#cb24-11" aria-hidden="true" tabindex="-1"></a>                 , turn <span class="ot">=</span> newTurn }</span></code></pre></div>
+<h1 id="solving-yahtzee">Solving Yahtzee</h1>
+<p>There are two parts to our algorithm for solving Yahtzee.
+The first part is the actual calculations for solving any given Yahtzee state.
+The second is the logic to do our calculations efficiently: threads, locks, caching, etc.
+I worked hard, but did not entirely succeed, to keep the two concerns separate, so we’ll have to switch back and forth between talking about program organization and our algorithm.</p>
+<p>We’ll start with the actual output of the algorithm:</p>
+<div class="sourceCode" id="cb25"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> <span class="dt">Decision</span> <span class="ot">=</span> (<span class="dt">Double</span>, <span class="dt">String</span>)</span></code></pre></div>
+<p>I’ve glued together the expected score of our game state with a prose description of the decision.
+A sample output would be <code>(50.0, "score roll as a yahtzee")</code> if we’re trying to decide which category to score a roll in, or <code>(35.2, "keep 2 1s")</code> if we’re deciding which dice to reroll.</p>
+<p>To store <code>Decision</code>s, we create a <code>Map</code> from <code>YState</code>s to <code>Decision</code>s.</p>
+<div class="sourceCode" id="cb26"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb26-1"><a href="#cb26-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> <span class="dt">DecisionMemo</span> <span class="ot">=</span> <span class="dt">TVar</span> (<span class="dt">Map</span> <span class="dt">YState</span> (<span class="dt">TMVar</span> <span class="dt">Decision</span>))</span>
+<span id="cb26-2"><a href="#cb26-2" aria-hidden="true" tabindex="-1"></a><span class="ot">emptymemo ::</span> <span class="dt">IO</span> <span class="dt">DecisionMemo</span></span>
+<span id="cb26-3"><a href="#cb26-3" aria-hidden="true" tabindex="-1"></a>emptymemo <span class="ot">=</span> newTVarIO Map.empty</span></code></pre></div>
+<p>We label it a “memo” because it’s intended to memoize solutions.
+In the course of computing a solution for one state, we’re going to compute solutions for lots of other states, and we don’t want to compute the solution for a state more than once, so we use this structure to store all of the previously computed decisions.</p>
+<p>For now, ignore the <code>TVar</code> and <code>TMVar</code> wrappers.
+They are part of Haskell’s <a href="https://hackage.haskell.org/package/stm-2.5.3.1/docs/Control-Concurrent-STM.html">STM (Software Transactional Memory)</a> package and are there to make concurrency work correctly.
+We’ll cover how we use them in detail later.</p>
+<h2 id="computing-a-score">Computing a Score</h2>
+<div class="sourceCode" id="cb27"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="ot">computeScore ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">YState</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Decision</span></span></code></pre></div>
+<p><code>computeScore</code> is the function for calculating an optimal decision from a state.
+It carries around two <code>DecisionMemo</code>s—one is the <em>global</em> memo and one is the <em>local</em> memo.
+For now, don’t worry about why we have two memos—just know that memoization is happening while we look at how the calculations are working.</p>
+<p>Let’s start with the simplest scenario.
+When your scorecard is full, the only thing left to score is the upper category bonus.
+Remember we don’t care what the <em>current</em> score on the scorecard is, just what the future expected score is.
+No decisions for the player to make here: if the upper total meets the threshold, we get the bonus.
+Otherwise we get zero.</p>
+<div class="sourceCode" id="cb28"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>computeScore _ _ ystate</span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> isFull (card ystate) <span class="ot">=</span> <span class="fu">return</span> <span class="op">$</span></span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> uptotal ystate <span class="op">&gt;=</span> <span class="dv">63</span></span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>      <span class="kw">then</span> (<span class="dv">35</span>, <span class="st">&quot;end game: upper bonus achieved&quot;</span>)</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>      <span class="kw">else</span> (<span class="dv">0</span>, <span class="st">&quot;end game: no upper bonus&quot;</span>)</span></code></pre></div>
+<p>Our next simplest scenario is at the end of a turn: we don’t need to decide how many dice to reroll or anything like that, we just need to decide which category to score our current roll in.</p>
+<p>The math is much easier to say then to calculate: score your current roll in each category, then calculate the expected score for each of the corresponding successor states and sum them with the corresponding category score.
+The category with the maximum sum is the correct decision.</p>
+<div class="sourceCode" id="cb29"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>computeScore gmemo lmemo ystate</span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> isEnd (turn ystate) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> cats <span class="ot">=</span> emptyCats (card ystate)</span></code></pre></div>
+<p>Note that our threading bookkeeping is already intruding a little bit.
+We use <code>mapConcurrently</code> to start the computation of each new turn in a new thread.</p>
+<div class="sourceCode" id="cb30"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb30-1"><a href="#cb30-1" aria-hidden="true" tabindex="-1"></a>    scores <span class="ot">&lt;-</span> mapConcurrently (computeScoreByCategory gmemo lmemo ystate) cats</span>
+<span id="cb30-2"><a href="#cb30-2" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span> <span class="op">$</span> <span class="fu">maximum</span> scores</span></code></pre></div>
+<p>Next, we handle what to do in the middle of a turn.
+This is more complicated; the questions are 1) “Should we score the current roll in a category now?” and if not, 2) “How many and which dice should we reroll?”
+Now the number of states starts getting larger; we have to calculate the expected scores for each category we could score the current roll in and every possible way to reroll the dice.</p>
+<div class="sourceCode" id="cb31"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a>computeScore gmemo lmemo ystate </span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> isMid (turn ystate) <span class="ot">=</span> <span class="kw">do</span></span></code></pre></div>
+<p>The following two lines do most of the work for this section.
+<code>keepCombinations</code> generates all the ways to keep some combination of dice, and then we map our compute helper function (<code>computeScoreOnReroll</code>, in the same genre as <code>computeScoreByCategory</code>) across all combinations.</p>
+<div class="sourceCode" id="cb32"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> keeps <span class="ot">=</span> keepCombinations <span class="op">$</span> roll (turn ystate)</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>    scoresOnRerolls <span class="ot">&lt;-</span> <span class="fu">mapM</span> (computeScoreOnReroll gmemo lmemo ystate) keeps</span></code></pre></div>
+<p>To handle the “score in a category immediately” option, we advance the state to the end of the turn, then calculate the expected score from there.
+Note the call to <code>expectedScore</code> instead of <code>computeScore</code> or one of its helper functions—<code>expectedScore</code> handles all the threading and caching bookkeeping, so any time we need do that bookkeeping, we call <code>expectedScore</code> instead of <code>computeScore</code>.</p>
+<div class="sourceCode" id="cb33"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> keepAllNextTurn <span class="ot">=</span> (turn ystate) { rerolls <span class="ot">=</span> <span class="dv">0</span> }</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a>        keepAllNextState <span class="ot">=</span> ystate { turn <span class="ot">=</span> keepAllNextTurn }</span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a>    scoreOnAllKeeps <span class="ot">&lt;-</span> expectedScore gmemo lmemo keepAllNextState</span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span> <span class="op">$</span> <span class="fu">maximum</span> (scoreOnAllKeeps <span class="op">:</span> scoresOnRerolls)</span></code></pre></div>
+<p>Finally, we handle what to do at the beginning of a turn.
+This is actually simple compared to the middle of a turn—we don’t have to make any decisions.
+We generate all the possible rolls of five dice (and the likelihood of each roll), find the expected score of each, and weight the score by the odds of that roll occuring.</p>
+<div class="sourceCode" id="cb34"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb34-1"><a href="#cb34-1" aria-hidden="true" tabindex="-1"></a>computeScore gmemo lmemo ystate</span>
+<span id="cb34-2"><a href="#cb34-2" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> isBegin (turn ystate) <span class="ot">=</span></span>
+<span id="cb34-3"><a href="#cb34-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> (allRolls, allRollOdds) <span class="ot">=</span> <span class="fu">unzip</span> rollFiveDice</span>
+<span id="cb34-4"><a href="#cb34-4" aria-hidden="true" tabindex="-1"></a>        nextTurns <span class="ot">=</span> <span class="fu">map</span> (<span class="dt">YTurn</span> ((rerolls <span class="op">$</span> turn ystate) <span class="op">-</span> <span class="dv">1</span>)) allRolls</span>
+<span id="cb34-5"><a href="#cb34-5" aria-hidden="true" tabindex="-1"></a>        nextStates <span class="ot">=</span> <span class="fu">map</span> (\nt <span class="ot">-&gt;</span> ystate { turn <span class="ot">=</span> nt }) nextTurns</span>
+<span id="cb34-6"><a href="#cb34-6" aria-hidden="true" tabindex="-1"></a>     <span class="kw">in</span> <span class="kw">do</span></span>
+<span id="cb34-7"><a href="#cb34-7" aria-hidden="true" tabindex="-1"></a>       scores <span class="ot">&lt;-</span> <span class="fu">mapM</span> (expectedScore gmemo lmemo) nextStates</span>
+<span id="cb34-8"><a href="#cb34-8" aria-hidden="true" tabindex="-1"></a>       <span class="kw">let</span> weightedScores <span class="ot">=</span> <span class="fu">zipWith</span> (\(s, _) <span class="ot">-&gt;</span> (s<span class="op">*</span>)) scores allRollOdds</span>
+<span id="cb34-9"><a href="#cb34-9" aria-hidden="true" tabindex="-1"></a>       <span class="fu">return</span> <span class="op">$</span> (<span class="fu">sum</span> weightedScores,</span>
+<span id="cb34-10"><a href="#cb34-10" aria-hidden="true" tabindex="-1"></a>                <span class="st">&quot;expected score at turn start is &quot;</span> <span class="op">++</span></span>
+<span id="cb34-11"><a href="#cb34-11" aria-hidden="true" tabindex="-1"></a>                <span class="fu">show</span> (<span class="fu">sum</span> weightedScores))</span>
+<span id="cb34-12"><a href="#cb34-12" aria-hidden="true" tabindex="-1"></a><span class="co">-- Our guards should be exhaustive; if we hit this code, we've made a mistake</span></span>
+<span id="cb34-13"><a href="#cb34-13" aria-hidden="true" tabindex="-1"></a><span class="co">-- either in our game state or in our logic.</span></span>
+<span id="cb34-14"><a href="#cb34-14" aria-hidden="true" tabindex="-1"></a>computeScore _ _ ystate </span>
+<span id="cb34-15"><a href="#cb34-15" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="fu">error</span> (<span class="st">&quot;shouldn't have hit this, state: &quot;</span> <span class="op">++</span> <span class="fu">show</span> ystate)</span></code></pre></div>
+<p>We hid a fair amount of complexity in two helper functions: <code>computeScoreByCategory</code> and <code>computeScoreOnReroll</code>.
+Both have the same logic: given a category to score in or a dice combination to keep, calculate the expected score.
+<code>computeScore</code> than maps each function over every available category or every available keeps combination.
+Both functions are probably more verbose than they need to be—I aimed for making it painfully clear how successor states were constructed from the initial state.</p>
+<div class="sourceCode" id="cb35"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb35-1"><a href="#cb35-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Given a Yahtzee state and category to score the current roll in, calculate the</span></span>
+<span id="cb35-2"><a href="#cb35-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- expected score and return the score with a description of the category we used.</span></span>
+<span id="cb35-3"><a href="#cb35-3" aria-hidden="true" tabindex="-1"></a><span class="ot">computeScoreByCategory ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">YState</span> <span class="ot">-&gt;</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Decision</span></span>
+<span id="cb35-4"><a href="#cb35-4" aria-hidden="true" tabindex="-1"></a>computeScoreByCategory gmemo lmemo yst cat <span class="ot">=</span></span>
+<span id="cb35-5"><a href="#cb35-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> (sc, ut, bo, tu) <span class="ot">=</span> (card yst, uptotal yst, bonus yst, turn yst)</span>
+<span id="cb35-6"><a href="#cb35-6" aria-hidden="true" tabindex="-1"></a>      dice <span class="ot">=</span> roll tu</span>
+<span id="cb35-7"><a href="#cb35-7" aria-hidden="true" tabindex="-1"></a>      score <span class="ot">=</span> scoreRollWithBonus bo dice cat</span>
+<span id="cb35-8"><a href="#cb35-8" aria-hidden="true" tabindex="-1"></a>      filledCard <span class="ot">=</span> fill cat sc</span></code></pre></div>
+<p>Note how we stop adding to the upper total once it hits 63.
+This minimizes the number of states we need to store, since we only care that a state’s upper categories total is 63 or above.</p>
+<div class="sourceCode" id="cb36"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb36-1"><a href="#cb36-1" aria-hidden="true" tabindex="-1"></a>      newTotal <span class="ot">=</span> <span class="fu">min</span> (ut <span class="op">+</span> (<span class="kw">if</span> isUpperCat cat <span class="kw">then</span> score <span class="kw">else</span> <span class="dv">0</span>)) <span class="dv">63</span></span>
+<span id="cb36-2"><a href="#cb36-2" aria-hidden="true" tabindex="-1"></a>      newBonus <span class="ot">=</span> <span class="kw">if</span> (cat <span class="op">==</span> <span class="dt">Yahtzee</span> <span class="op">&amp;&amp;</span> isYahtzee dice) <span class="kw">then</span> <span class="dt">True</span> <span class="kw">else</span> bo</span>
+<span id="cb36-3"><a href="#cb36-3" aria-hidden="true" tabindex="-1"></a>      nextYState <span class="ot">=</span> <span class="dt">YState</span> filledCard newTotal newBonus newTurn</span>
+<span id="cb36-4"><a href="#cb36-4" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> <span class="kw">do</span></span>
+<span id="cb36-5"><a href="#cb36-5" aria-hidden="true" tabindex="-1"></a>      (future, _) <span class="ot">&lt;-</span> expectedScore gmemo lmemo nextYState</span>
+<span id="cb36-6"><a href="#cb36-6" aria-hidden="true" tabindex="-1"></a>      <span class="fu">return</span> <span class="op">$</span> (<span class="fu">fromIntegral</span> score <span class="op">+</span> future,</span>
+<span id="cb36-7"><a href="#cb36-7" aria-hidden="true" tabindex="-1"></a>               <span class="st">&quot;fill category &quot;</span> <span class="op">++</span> <span class="fu">show</span> cat <span class="op">++</span> <span class="st">&quot;, score &quot;</span> <span class="op">++</span> <span class="fu">show</span> score)</span></code></pre></div>
+<p><code>computeScoreOnReroll</code> should look familiar, as it reuses several patterns we’ve already seen: getting lists of possible dice rolls and their respective probabilities, constructing successor states by mapping constructors across lists of components, mapping <code>expectedScore</code> across successor states, and then weighting the expected scores based on the odds of that state occurring.</p>
+<div class="sourceCode" id="cb37"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb37-1"><a href="#cb37-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- Given a Yahtzee state and a list of dice to keep from the current roll, calculate</span></span>
+<span id="cb37-2"><a href="#cb37-2" aria-hidden="true" tabindex="-1"></a><span class="co">-- the expected score and return the score with a description of the dice we kept.</span></span>
+<span id="cb37-3"><a href="#cb37-3" aria-hidden="true" tabindex="-1"></a><span class="ot">computeScoreOnReroll ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">YState</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Decision</span></span>
+<span id="cb37-4"><a href="#cb37-4" aria-hidden="true" tabindex="-1"></a>computeScoreOnReroll gmemo lmemo yst keeps <span class="ot">=</span></span>
+<span id="cb37-5"><a href="#cb37-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> (partialRolls, partialRollOdds) <span class="ot">=</span> <span class="fu">unzip</span> (completeRollListWithOdds <span class="op">!!</span> (<span class="dv">5</span> <span class="op">-</span> rollSize keeps <span class="op">-</span> <span class="dv">1</span>))</span>
+<span id="cb37-6"><a href="#cb37-6" aria-hidden="true" tabindex="-1"></a>      newRolls <span class="ot">=</span> <span class="fu">map</span> (unionRoll keeps) partialRolls</span>
+<span id="cb37-7"><a href="#cb37-7" aria-hidden="true" tabindex="-1"></a>      nextTurns <span class="ot">=</span> <span class="fu">map</span> (<span class="dt">YTurn</span> ((rerolls <span class="op">$</span> turn yst) <span class="op">-</span> <span class="dv">1</span>)) newRolls</span>
+<span id="cb37-8"><a href="#cb37-8" aria-hidden="true" tabindex="-1"></a>      nextStates <span class="ot">=</span> <span class="fu">map</span> (\nt <span class="ot">-&gt;</span> yst { turn <span class="ot">=</span> nt }) nextTurns</span>
+<span id="cb37-9"><a href="#cb37-9" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> <span class="kw">do</span></span>
+<span id="cb37-10"><a href="#cb37-10" aria-hidden="true" tabindex="-1"></a>        scores <span class="ot">&lt;-</span> <span class="fu">mapM</span> (expectedScore gmemo lmemo) nextStates</span>
+<span id="cb37-11"><a href="#cb37-11" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> weightedScores <span class="ot">=</span> <span class="fu">zipWith</span> (\(s, _) <span class="ot">-&gt;</span> (s<span class="op">*</span>)) scores partialRollOdds</span>
+<span id="cb37-12"><a href="#cb37-12" aria-hidden="true" tabindex="-1"></a>        <span class="fu">return</span> <span class="op">$</span> (<span class="fu">sum</span> weightedScores, showRoll keeps)</span>
+<span id="cb37-13"><a href="#cb37-13" aria-hidden="true" tabindex="-1"></a>          <span class="kw">where</span></span>
+<span id="cb37-14"><a href="#cb37-14" aria-hidden="true" tabindex="-1"></a>            <span class="co">-- Convenience functions for displaying dice rolls in English.</span></span>
+<span id="cb37-15"><a href="#cb37-15" aria-hidden="true" tabindex="-1"></a><span class="ot">            showRoll ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">String</span></span>
+<span id="cb37-16"><a href="#cb37-16" aria-hidden="true" tabindex="-1"></a>            showRoll roll <span class="ot">=</span> <span class="fu">foldl</span> (<span class="op">++</span>) <span class="st">&quot;keep &quot;</span> (<span class="fu">map</span> (showDie roll) (distinctFaces roll))</span>
+<span id="cb37-17"><a href="#cb37-17" aria-hidden="true" tabindex="-1"></a>            showDie roll num <span class="ot">=</span></span>
+<span id="cb37-18"><a href="#cb37-18" aria-hidden="true" tabindex="-1"></a>              <span class="fu">show</span> (occur num roll) <span class="op">++</span></span>
+<span id="cb37-19"><a href="#cb37-19" aria-hidden="true" tabindex="-1"></a>              <span class="st">&quot; &quot;</span> <span class="op">++</span></span>
+<span id="cb37-20"><a href="#cb37-20" aria-hidden="true" tabindex="-1"></a>              <span class="fu">show</span> num <span class="op">++</span></span>
+<span id="cb37-21"><a href="#cb37-21" aria-hidden="true" tabindex="-1"></a>              <span class="kw">if</span> (occur num roll <span class="op">&gt;</span> <span class="dv">1</span>) <span class="kw">then</span> <span class="st">&quot;s,&quot;</span> <span class="kw">else</span> <span class="st">&quot;,&quot;</span></span></code></pre></div>
+<h2 id="locks-threads-and-caches-oh-my">Locks, Threads, and Caches, Oh My!</h2>
+<p>A naïve implementation of the computations described so far will correctly solve for the correct decision for any given Yahtzee state, but it will take forever.
+(When I was experimenting, my naïve version started taking on the order of hours to finish when there were only four empty categories on the scorecard.)</p>
+<h3 id="memoization">Memoization</h3>
+<p>The major design technique we have to speed up the solver is memoization.
+Each optimal decision for any state depends on the expected score for lots of other states and we don’t want to waste time recalculating any states we’ve already seen before.
+However, if we try to store every single game state in a single memo, we will quickly run out of memory.
+The number of possible <code>Scorecard</code>s is <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msup><mn>2</mn><mn>13</mn></msup><annotation encoding="application/x-tex">2^{13}</annotation></semantics></math> (each of the 13 categories is an on/off switch).
+Then we multiply by 2 for whether or not the Yahtzee bonus is active, than by 64 for the number of possible upper category totals (0–63 inclusive), than by the number of possible complete dice rolls (923), and finally by the number of reroll options (0, 1, 2, or 3).</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>13</mn></msup><mo>×</mo><mn>63</mn><mo>×</mo><mn>2</mn><mo>×</mo><mn>923</mn><mo>×</mo><mn>4</mn><mo>≈</mo><mn>3.8</mn><mi>B</mi></mrow><annotation encoding="application/x-tex">2^{13} \times 63 \times 2 \times 923 \times 4 \approx 3.8B</annotation></semantics></math></p>
+<p>Even with only a few bytes per state, we will rapidly run out of memory.
+(And I haven’t even completely minimized the number of bytes per state—while I did some squeezing of data into bitmaps, I stored strings for describing decisions, which will increase the required storage.)</p>
+<p>So we can’t store the solution to every possible Yahtzee state.
+Luckily, the graph of Yahtzee states has an interesting structure that allows us to store solutions to only a fraction of the possible states.</p>
+<p>At the end of any given turn, there are a limited number of successor states: the number of empty categories multiplied by the number of possible dice rolls (<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>e</mi><mo>×</mo><mn>923</mn></mrow><annotation encoding="application/x-tex">e \times 923</annotation></semantics></math>, where <math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>e</mi><annotation encoding="application/x-tex">e</annotation></semantics></math> is the number of empty categories).
+Every single turn has the same internal structure—an initial roll, followed by choices of rerolls or scoring, and the odds of any given roll or reroll are the same for every turn.
+This leads to a graph where there are a number of important “guideposts” (the beginning of turns), and the possible transitions between guideposts have the same structure.</p>
+<p>Crucially, the intra-turn states do not affect the expected scores of any state beyond their associated guidepost.
+Once we have calculated the expected score for a guidepost, we never need to touch the associated intra-turn states again.
+Therefore, the trick to efficient memoization is that we only permanently store the expected scores for the guideposts.
+Once that number has been calculated, no other state relies on any states within that turn and we can throw those expected scores away.</p>
+<p>However, while we are in the midst of a turn, we still don’t want to recalculate state expected scores if we don’t have to.
+So we use a separate, local memo to store scores for that turn and discard that memo when we’re finished.</p>
+<p>In the graph below, the guideposts—the beginning of turns—are marked by the empty categories on the scorecard.
+The larger box shows the structure of the intra-turn states; hopefully it’s clear why they can be discarded after we’ve calculated the expected score for the initial guidepost.</p>
+<p><img src="../images/yahtzee-turn-structure.svg" alt="Yahtzee state graph" /><br />
+</p>
+<p>This is why our functions are passing around two different memos.
+One is the global memo, shared among all function invocations, and one is the local memo, used only for one turn and then discarded.</p>
+<h3 id="threading">Threading</h3>
+<p>This graph structure points us to a pretty intuitive threading model: spawn a new thread for each turn.
+Each thread will have to coordinate access to the global memo, but will be able to use their own local memo without worrying about contention.
+We’ve already seen the bit of code that spawns new threads—the <code>mapConcurrently</code> call in <code>computeScore</code>.</p>
+<h3 id="locking">Locking</h3>
+<p>But we do have to worry about coordination regarding the global memo.
+The logic we want is: when we need to calculate the expected score at the beginning of a turn, we create a new thread (we saw <code>computeScore</code> do that with <code>mapConcurrently</code>).
+The new thread checks if any other thread is working on the same turn—if there is, the new thread waits for the other.
+If not, the thread “claims” the turn so no other threads can work on it.</p>
+<p>This is what the <code>TVar</code> and <code>TMVar</code> in the <code>DecisionMemo</code> are for.
+Recall that the definition is:</p>
+<div class="sourceCode" id="cb38"><pre class="sourceCode haskell"><code class="sourceCode haskell"><span id="cb38-1"><a href="#cb38-1" aria-hidden="true" tabindex="-1"></a><span class="kw">type</span> <span class="dt">DecisionMemo</span> <span class="ot">=</span> <span class="dt">TVar</span> (<span class="dt">Map</span> <span class="dt">YState</span> (<span class="dt">TMVar</span> <span class="dt">Decision</span>))</span></code></pre></div>
+<p>The outer <code>TVar</code> protects the entire structure when a thread is checking if there are any other threads working on a particular turn.
+If the current <code>YState</code> does not exist in the map, there are no other threads—the current thread claims the turn by inserting an empty <code>TMVar</code> into the map.
+Once the producer thread has finished calculating the turn’s expected score, it fills the <code>TMVar</code> with the result.
+The synchronization is actually fairly straightforward using the STM <code>atomically</code> function.</p>
+<p>Now we are finally ready to look at the function that does all this.
+<code>expectedScore</code> is the entry point to our Yahtzee solver.
+It does all the bookkeeping described above and then calls <code>computeScore</code> for the actual calculation.</p>
+<div class="sourceCode" id="cb39"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb39-1"><a href="#cb39-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- The entry point for the Yahtzee solver. Given a state, return the expected score.</span></span>
+<span id="cb39-2"><a href="#cb39-2" aria-hidden="true" tabindex="-1"></a><span class="ot">expectedScore ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">YState</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">Decision</span></span>
+<span id="cb39-3"><a href="#cb39-3" aria-hidden="true" tabindex="-1"></a>expectedScore gmemo lmemo ystate</span></code></pre></div>
+<p>The first case we handle is when the <code>YState</code> is at the beginning of a turn.
+All of those states should be stored in the global memo, so we check if another thread has computed or is computing it.</p>
+<div class="sourceCode" id="cb40"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb40-1"><a href="#cb40-1" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> isBegin (turn ystate) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb40-2"><a href="#cb40-2" aria-hidden="true" tabindex="-1"></a>    (turnlock, iamproducer) <span class="ot">&lt;-</span> checkMemoized gmemo ystate</span>
+<span id="cb40-3"><a href="#cb40-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> iamproducer</span>
+<span id="cb40-4"><a href="#cb40-4" aria-hidden="true" tabindex="-1"></a>      <span class="kw">then</span> <span class="kw">do</span></span></code></pre></div>
+<p>If we’re the producer, we create a blank local memo and pass it in to <code>computeScore</code>.
+Note that we force strict evaluation here using the <code>force</code> function from <code>DeepSeq</code>—Haskell’s lazy evaluation is not helpful when we absolutely need the local memo to be garbage collected in a timely manner to avoid running out of memory.</p>
+<div class="sourceCode" id="cb41"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb41-1"><a href="#cb41-1" aria-hidden="true" tabindex="-1"></a>        newlmemo <span class="ot">&lt;-</span> emptymemo</span>
+<span id="cb41-2"><a href="#cb41-2" aria-hidden="true" tabindex="-1"></a>        computedscore <span class="ot">&lt;-</span> computeScore gmemo newlmemo ystate</span>
+<span id="cb41-3"><a href="#cb41-3" aria-hidden="true" tabindex="-1"></a>        <span class="kw">let</span> <span class="op">!</span>evaluated <span class="ot">=</span> force computedscore</span>
+<span id="cb41-4"><a href="#cb41-4" aria-hidden="true" tabindex="-1"></a>        atomically <span class="op">$</span> <span class="kw">do</span></span>
+<span id="cb41-5"><a href="#cb41-5" aria-hidden="true" tabindex="-1"></a>          writeTVar newlmemo Map.empty</span>
+<span id="cb41-6"><a href="#cb41-6" aria-hidden="true" tabindex="-1"></a>          putTMVar turnlock evaluated</span>
+<span id="cb41-7"><a href="#cb41-7" aria-hidden="true" tabindex="-1"></a>          readTMVar turnlock</span></code></pre></div>
+<p>If we’re not the producer, we just read from lock that <code>checkMemoized</code> returned for us.
+<code>readTMVar</code> will block until the other thread has computed the decision and put it in the lock.</p>
+<div class="sourceCode" id="cb42"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb42-1"><a href="#cb42-1" aria-hidden="true" tabindex="-1"></a>      <span class="kw">else</span> atomically <span class="op">$</span> readTMVar turnlock</span></code></pre></div>
+<p>So what if the <code>YState</code> is in the midst of a turn?
+It could still be memoized!
+Even though the local memo only lives as long as we’re computing turns within the same state, we’ll still need to compute states several times.</p>
+<div class="sourceCode" id="cb43"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb43-1"><a href="#cb43-1" aria-hidden="true" tabindex="-1"></a>  <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb43-2"><a href="#cb43-2" aria-hidden="true" tabindex="-1"></a>    (turnlock, iamproducer) <span class="ot">&lt;-</span> checkMemoized lmemo ystate</span>
+<span id="cb43-3"><a href="#cb43-3" aria-hidden="true" tabindex="-1"></a>    <span class="kw">if</span> iamproducer</span>
+<span id="cb43-4"><a href="#cb43-4" aria-hidden="true" tabindex="-1"></a>      <span class="kw">then</span> <span class="kw">do</span></span></code></pre></div>
+<p>But if we need to compute the score ourselves, we reuse the same local memo.</p>
+<div class="sourceCode" id="cb44"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb44-1"><a href="#cb44-1" aria-hidden="true" tabindex="-1"></a>        computedscore <span class="ot">&lt;-</span> computeScore gmemo lmemo ystate</span>
+<span id="cb44-2"><a href="#cb44-2" aria-hidden="true" tabindex="-1"></a>        atomically <span class="op">$</span> putTMVar turnlock computedscore</span>
+<span id="cb44-3"><a href="#cb44-3" aria-hidden="true" tabindex="-1"></a>        atomically <span class="op">$</span> readTMVar turnlock</span>
+<span id="cb44-4"><a href="#cb44-4" aria-hidden="true" tabindex="-1"></a>      <span class="kw">else</span> atomically <span class="op">$</span> readTMVar turnlock</span>
+<span id="cb44-5"><a href="#cb44-5" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb44-6"><a href="#cb44-6" aria-hidden="true" tabindex="-1"></a><span class="ot">    checkMemoized ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">YState</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> (<span class="dt">TMVar</span> <span class="dt">Decision</span>, <span class="dt">Bool</span>)</span></code></pre></div>
+<p><code>checkMemoized</code> 1) checks if the <code>YState</code> has been memoized and 2) returns the <code>TMVar</code> to read from.
+<code>checkMemoized</code> returns <code>True</code> if the caller needs to compute the decision themselves.
+If <code>False</code>, another thread is computing the decision and the current one should block until the decision is available.
+This is the only time where we care about the external <code>TVar</code>—it is there to make sure that only one thread can claim computation of a particular <code>YState</code>.</p>
+<div class="sourceCode" id="cb45"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb45-1"><a href="#cb45-1" aria-hidden="true" tabindex="-1"></a>    checkMemoized memo ystate <span class="ot">=</span> atomically <span class="op">$</span> <span class="kw">do</span></span>
+<span id="cb45-2"><a href="#cb45-2" aria-hidden="true" tabindex="-1"></a>      <span class="fu">map</span> <span class="ot">&lt;-</span> readTVar memo</span>
+<span id="cb45-3"><a href="#cb45-3" aria-hidden="true" tabindex="-1"></a>      <span class="kw">case</span> Map.lookup ystate <span class="fu">map</span> <span class="kw">of</span></span>
+<span id="cb45-4"><a href="#cb45-4" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Just</span> lock <span class="ot">-&gt;</span> <span class="fu">return</span> (lock, <span class="dt">False</span>)</span>
+<span id="cb45-5"><a href="#cb45-5" aria-hidden="true" tabindex="-1"></a>        <span class="dt">Nothing</span>   <span class="ot">-&gt;</span> <span class="kw">do</span></span>
+<span id="cb45-6"><a href="#cb45-6" aria-hidden="true" tabindex="-1"></a>          emptylock <span class="ot">&lt;-</span> newEmptyTMVar</span>
+<span id="cb45-7"><a href="#cb45-7" aria-hidden="true" tabindex="-1"></a>          writeTVar memo (Map.insert ystate emptylock <span class="fu">map</span>)</span>
+<span id="cb45-8"><a href="#cb45-8" aria-hidden="true" tabindex="-1"></a>          <span class="fu">return</span> (emptylock, <span class="dt">True</span>)</span></code></pre></div>
+<h1 id="serialization">Serialization</h1>
+<p>It seems a shame to do all this computation every time we run the program, so I added some basic serialization and storage.
+This requires us to implement the <code>Binary</code> typeclass for each type we want to serialize.
+I used the absolute simplest implementations possible.
+Check out the <a href="https://hackage.haskell.org/package/binary-0.8.9.3/docs/Data-Binary.html">Data.Binary</a> documentation for how this works.</p>
+<div class="sourceCode" id="cb46"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb46-1"><a href="#cb46-1" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Binary</span> <span class="dt">Scorecard</span> <span class="kw">where</span></span>
+<span id="cb46-2"><a href="#cb46-2" aria-hidden="true" tabindex="-1"></a>  put (<span class="dt">Scorecard</span> w) <span class="ot">=</span> put w</span>
+<span id="cb46-3"><a href="#cb46-3" aria-hidden="true" tabindex="-1"></a>  get <span class="ot">=</span> <span class="dt">Scorecard</span> <span class="op">&lt;$&gt;</span> get</span>
+<span id="cb46-4"><a href="#cb46-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-5"><a href="#cb46-5" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Binary</span> <span class="dt">Roll</span> <span class="kw">where</span></span>
+<span id="cb46-6"><a href="#cb46-6" aria-hidden="true" tabindex="-1"></a>  put (<span class="dt">Roll</span> w) <span class="ot">=</span> put w</span>
+<span id="cb46-7"><a href="#cb46-7" aria-hidden="true" tabindex="-1"></a>  get <span class="ot">=</span> <span class="dt">Roll</span> <span class="op">&lt;$&gt;</span> get</span>
+<span id="cb46-8"><a href="#cb46-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-9"><a href="#cb46-9" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Binary</span> <span class="dt">YTurn</span> <span class="kw">where</span></span>
+<span id="cb46-10"><a href="#cb46-10" aria-hidden="true" tabindex="-1"></a>  put (<span class="dt">YTurn</span> rr r) <span class="ot">=</span> put rr <span class="op">&gt;&gt;</span> put r</span>
+<span id="cb46-11"><a href="#cb46-11" aria-hidden="true" tabindex="-1"></a>  get <span class="ot">=</span> <span class="dt">YTurn</span> <span class="op">&lt;$&gt;</span> get <span class="op">&lt;*&gt;</span> get</span>
+<span id="cb46-12"><a href="#cb46-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb46-13"><a href="#cb46-13" aria-hidden="true" tabindex="-1"></a><span class="kw">instance</span> <span class="dt">Binary</span> <span class="dt">YState</span> <span class="kw">where</span></span>
+<span id="cb46-14"><a href="#cb46-14" aria-hidden="true" tabindex="-1"></a>  put (<span class="dt">YState</span> c ut b t) <span class="ot">=</span> put c <span class="op">&gt;&gt;</span> put ut <span class="op">&gt;&gt;</span> put b <span class="op">&gt;&gt;</span> put t</span>
+<span id="cb46-15"><a href="#cb46-15" aria-hidden="true" tabindex="-1"></a>  get <span class="ot">=</span> <span class="dt">YState</span> <span class="op">&lt;$&gt;</span> get <span class="op">&lt;*&gt;</span> get <span class="op">&lt;*&gt;</span> get <span class="op">&lt;*&gt;</span> get</span></code></pre></div>
+<p>Once the <code>Binary</code> typeclass is implemented, the <code>saveMemo</code> and <code>loadMemo</code> functions relatively easy to write.</p>
+<div class="sourceCode" id="cb47"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb47-1"><a href="#cb47-1" aria-hidden="true" tabindex="-1"></a><span class="co">-- write a DecisionMemo to a file</span></span>
+<span id="cb47-2"><a href="#cb47-2" aria-hidden="true" tabindex="-1"></a><span class="ot">saveMemo ::</span> <span class="dt">DecisionMemo</span> <span class="ot">-&gt;</span> <span class="dt">FilePath</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> ()</span>
+<span id="cb47-3"><a href="#cb47-3" aria-hidden="true" tabindex="-1"></a>saveMemo memo filepath <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb47-4"><a href="#cb47-4" aria-hidden="true" tabindex="-1"></a>  memoMap <span class="ot">&lt;-</span> atomically <span class="op">$</span> readTVar memo</span>
+<span id="cb47-5"><a href="#cb47-5" aria-hidden="true" tabindex="-1"></a>  <span class="co">-- Extract decisions from TMVars (only those that are filled)</span></span>
+<span id="cb47-6"><a href="#cb47-6" aria-hidden="true" tabindex="-1"></a>  decisions <span class="ot">&lt;-</span> atomically <span class="op">$</span> <span class="kw">do</span></span>
+<span id="cb47-7"><a href="#cb47-7" aria-hidden="true" tabindex="-1"></a>    <span class="kw">let</span> entries <span class="ot">=</span> Map.toList memoMap</span>
+<span id="cb47-8"><a href="#cb47-8" aria-hidden="true" tabindex="-1"></a>    filledEntries <span class="ot">&lt;-</span> <span class="fu">mapM</span> tryReadEntry entries</span>
+<span id="cb47-9"><a href="#cb47-9" aria-hidden="true" tabindex="-1"></a>    <span class="fu">return</span> <span class="op">$</span> Map.fromList [(k, v) <span class="op">|</span> (k, <span class="dt">Just</span> v) <span class="ot">&lt;-</span> filledEntries]</span>
+<span id="cb47-10"><a href="#cb47-10" aria-hidden="true" tabindex="-1"></a>  encodeFile filepath decisions</span>
+<span id="cb47-11"><a href="#cb47-11" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb47-12"><a href="#cb47-12" aria-hidden="true" tabindex="-1"></a><span class="ot">    tryReadEntry ::</span> (<span class="dt">YState</span>, <span class="dt">TMVar</span> <span class="dt">Decision</span>) <span class="ot">-&gt;</span> <span class="dt">STM</span> (<span class="dt">YState</span>, <span class="dt">Maybe</span> <span class="dt">Decision</span>)</span>
+<span id="cb47-13"><a href="#cb47-13" aria-hidden="true" tabindex="-1"></a>    tryReadEntry (ystate, tmvar) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb47-14"><a href="#cb47-14" aria-hidden="true" tabindex="-1"></a>      isEmpty <span class="ot">&lt;-</span> isEmptyTMVar tmvar</span>
+<span id="cb47-15"><a href="#cb47-15" aria-hidden="true" tabindex="-1"></a>      <span class="kw">if</span> isEmpty</span>
+<span id="cb47-16"><a href="#cb47-16" aria-hidden="true" tabindex="-1"></a>        <span class="kw">then</span> <span class="fu">return</span> (ystate, <span class="dt">Nothing</span>)</span>
+<span id="cb47-17"><a href="#cb47-17" aria-hidden="true" tabindex="-1"></a>        <span class="kw">else</span> <span class="kw">do</span></span>
+<span id="cb47-18"><a href="#cb47-18" aria-hidden="true" tabindex="-1"></a>          decision <span class="ot">&lt;-</span> readTMVar tmvar</span>
+<span id="cb47-19"><a href="#cb47-19" aria-hidden="true" tabindex="-1"></a>          <span class="fu">return</span> (ystate, <span class="dt">Just</span> decision)</span>
+<span id="cb47-20"><a href="#cb47-20" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb47-21"><a href="#cb47-21" aria-hidden="true" tabindex="-1"></a><span class="co">-- load a DecisionMemo from a file</span></span>
+<span id="cb47-22"><a href="#cb47-22" aria-hidden="true" tabindex="-1"></a><span class="ot">loadMemo ::</span> <span class="dt">FilePath</span> <span class="ot">-&gt;</span> <span class="dt">IO</span> <span class="dt">DecisionMemo</span></span>
+<span id="cb47-23"><a href="#cb47-23" aria-hidden="true" tabindex="-1"></a>loadMemo filepath <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb47-24"><a href="#cb47-24" aria-hidden="true" tabindex="-1"></a>  decisions <span class="ot">&lt;-</span> decodeFile<span class="ot"> filepath ::</span> <span class="dt">IO</span> (<span class="dt">Map</span> <span class="dt">YState</span> <span class="dt">Decision</span>)</span>
+<span id="cb47-25"><a href="#cb47-25" aria-hidden="true" tabindex="-1"></a>  atomically <span class="op">$</span> <span class="kw">do</span></span>
+<span id="cb47-26"><a href="#cb47-26" aria-hidden="true" tabindex="-1"></a>    memoMap <span class="ot">&lt;-</span> <span class="fu">mapM</span> fillEntry (Map.toList decisions)</span>
+<span id="cb47-27"><a href="#cb47-27" aria-hidden="true" tabindex="-1"></a>    newTVar (Map.fromList memoMap)</span>
+<span id="cb47-28"><a href="#cb47-28" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb47-29"><a href="#cb47-29" aria-hidden="true" tabindex="-1"></a><span class="ot">    fillEntry ::</span> (<span class="dt">YState</span>, <span class="dt">Decision</span>) <span class="ot">-&gt;</span> <span class="dt">STM</span> (<span class="dt">YState</span>, <span class="dt">TMVar</span> <span class="dt">Decision</span>)</span>
+<span id="cb47-30"><a href="#cb47-30" aria-hidden="true" tabindex="-1"></a>    fillEntry (ystate, decision) <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb47-31"><a href="#cb47-31" aria-hidden="true" tabindex="-1"></a>      tmvar <span class="ot">&lt;-</span> newTMVar decision</span>
+<span id="cb47-32"><a href="#cb47-32" aria-hidden="true" tabindex="-1"></a>      <span class="fu">return</span> (ystate, tmvar)</span></code></pre></div>
+<h1 id="finally-a-main-function">Finally, A Main Function</h1>
+<p>Our main function is as barebones as can be and the UI is just about usable.</p>
+<p>It reads a line at a time, with each element in the line separated by spaces.</p>
+<ul>
+<li>The first 13 elements mark whether each category is used: an <code>-</code> for unused and an <code>x</code> for used. The categories are in the standard Yahtzee scorecard order: ones, twos, threes, fours, fives, sixes, three-of-a-kind, four-of-a-kind, full house, small straight, large straight, Yahtzee, chance.</li>
+<li>The next is the upper total.</li>
+<li>Then whether the Yahtzee Bonus is active (<code>True</code> or <code>False</code>).</li>
+<li>Then how many rerolls are left in the current turn.</li>
+<li>The last five elements represent the dice roll.</li>
+</ul>
+<p>For example:</p>
+<div class="sourceCode" id="cb48"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb48-1"><a href="#cb48-1" aria-hidden="true" tabindex="-1"></a><span class="bu">echo</span> <span class="st">'- x x x x x x x x x x - x 62 False 2 1 2 2 2 6'</span> <span class="kw">|</span> <span class="ex">stack</span> ysolver.lhs</span></code></pre></div>
+<p>calculates what the best option is when:</p>
+<ul>
+<li>The ones and Yahtzee categories are empty, and all others are used.</li>
+<li>The upper category total is 62.</li>
+<li>The next Yahtzee will not earn a bonus.</li>
+<li>We have two rolls left in our current turn.</li>
+<li>We just rolled one 1, three 2s, and a 6.</li>
+</ul>
+<p>The question is how we balance trying to achieve a Yahtzee (presumably using the 2s) versus taking the safe option of hitting our bonus by scoring a 1 in the ones category.</p>
+<p>For the curious: solving the starting position from scratch with no precomputation took 33 hours.
+Glenn comments that his version, written in C++, took an hour; I am not sure how to match that, other than giving up on Haskell.
+The size of the resulting complete memoization file is 56MB, but any further computations take fractions of a second.
+56MB is larger than necessary—removing or minimizing the strings from the <code>Decision</code> datatype would cut down the size significantly.</p>
+<div class="sourceCode" id="cb49"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb49-1"><a href="#cb49-1" aria-hidden="true" tabindex="-1"></a><span class="ot">main ::</span> <span class="dt">IO</span> ()</span>
+<span id="cb49-2"><a href="#cb49-2" aria-hidden="true" tabindex="-1"></a>main <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb49-3"><a href="#cb49-3" aria-hidden="true" tabindex="-1"></a>  memoFileExists <span class="ot">&lt;-</span> doesFileExist <span class="st">&quot;yahtzee.memo&quot;</span></span>
+<span id="cb49-4"><a href="#cb49-4" aria-hidden="true" tabindex="-1"></a>  gmemo <span class="ot">&lt;-</span> <span class="kw">if</span> memoFileExists</span>
+<span id="cb49-5"><a href="#cb49-5" aria-hidden="true" tabindex="-1"></a>             <span class="kw">then</span> loadMemo <span class="st">&quot;yahtzee.memo&quot;</span></span>
+<span id="cb49-6"><a href="#cb49-6" aria-hidden="true" tabindex="-1"></a>             <span class="kw">else</span> emptymemo</span>
+<span id="cb49-7"><a href="#cb49-7" aria-hidden="true" tabindex="-1"></a>  loop gmemo</span>
+<span id="cb49-8"><a href="#cb49-8" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb49-9"><a href="#cb49-9" aria-hidden="true" tabindex="-1"></a>    loop global <span class="ot">=</span> <span class="kw">do</span></span>
+<span id="cb49-10"><a href="#cb49-10" aria-hidden="true" tabindex="-1"></a>      end <span class="ot">&lt;-</span> isEOF</span>
+<span id="cb49-11"><a href="#cb49-11" aria-hidden="true" tabindex="-1"></a>      <span class="kw">if</span> end</span>
+<span id="cb49-12"><a href="#cb49-12" aria-hidden="true" tabindex="-1"></a>        <span class="kw">then</span> <span class="fu">return</span> ()</span>
+<span id="cb49-13"><a href="#cb49-13" aria-hidden="true" tabindex="-1"></a>        <span class="kw">else</span> <span class="kw">do</span></span>
+<span id="cb49-14"><a href="#cb49-14" aria-hidden="true" tabindex="-1"></a>          input <span class="ot">&lt;-</span> <span class="fu">getLine</span></span>
+<span id="cb49-15"><a href="#cb49-15" aria-hidden="true" tabindex="-1"></a>          <span class="kw">let</span> ystate <span class="ot">=</span> parseInput input</span>
+<span id="cb49-16"><a href="#cb49-16" aria-hidden="true" tabindex="-1"></a>          local <span class="ot">&lt;-</span> emptymemo</span>
+<span id="cb49-17"><a href="#cb49-17" aria-hidden="true" tabindex="-1"></a>          result <span class="ot">&lt;-</span> expectedScore global local ystate</span>
+<span id="cb49-18"><a href="#cb49-18" aria-hidden="true" tabindex="-1"></a>          <span class="fu">putStrLn</span> <span class="op">$</span> <span class="fu">show</span> result</span>
+<span id="cb49-19"><a href="#cb49-19" aria-hidden="true" tabindex="-1"></a>          saveMemo global <span class="st">&quot;yahtzee.memo&quot;</span></span>
+<span id="cb49-20"><a href="#cb49-20" aria-hidden="true" tabindex="-1"></a>          loop global</span></code></pre></div>
+<p>Our parsing function does zero validation or error checking.</p>
+<div class="sourceCode" id="cb50"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb50-1"><a href="#cb50-1" aria-hidden="true" tabindex="-1"></a><span class="ot">parseInput ::</span> <span class="dt">String</span> <span class="ot">-&gt;</span> <span class="dt">YState</span></span>
+<span id="cb50-2"><a href="#cb50-2" aria-hidden="true" tabindex="-1"></a>parseInput line <span class="ot">=</span></span>
+<span id="cb50-3"><a href="#cb50-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> ws <span class="ot">=</span> <span class="fu">words</span> line</span>
+<span id="cb50-4"><a href="#cb50-4" aria-hidden="true" tabindex="-1"></a>      scWords <span class="ot">=</span> <span class="fu">take</span> <span class="dv">13</span> ws</span>
+<span id="cb50-5"><a href="#cb50-5" aria-hidden="true" tabindex="-1"></a>      allCatsWithMark <span class="ot">=</span> <span class="fu">zip</span> allCats scWords</span>
+<span id="cb50-6"><a href="#cb50-6" aria-hidden="true" tabindex="-1"></a>      sc <span class="ot">=</span> foldl' (\acc (c, l) <span class="ot">-&gt;</span> <span class="kw">if</span> l <span class="op">==</span> <span class="st">&quot;x&quot;</span> <span class="kw">then</span> fill c acc <span class="kw">else</span> acc) emptycard allCatsWithMark</span>
+<span id="cb50-7"><a href="#cb50-7" aria-hidden="true" tabindex="-1"></a>      ut <span class="ot">=</span> <span class="fu">read</span> <span class="op">$</span> ws <span class="op">!!</span> <span class="dv">13</span></span>
+<span id="cb50-8"><a href="#cb50-8" aria-hidden="true" tabindex="-1"></a>      b <span class="ot">=</span> <span class="fu">read</span> <span class="op">$</span> ws <span class="op">!!</span> <span class="dv">14</span></span>
+<span id="cb50-9"><a href="#cb50-9" aria-hidden="true" tabindex="-1"></a>      rr <span class="ot">=</span> <span class="fu">read</span> <span class="op">$</span> ws <span class="op">!!</span> <span class="dv">15</span></span>
+<span id="cb50-10"><a href="#cb50-10" aria-hidden="true" tabindex="-1"></a>      rollWords <span class="ot">=</span> <span class="fu">drop</span> <span class="dv">16</span> ws</span>
+<span id="cb50-11"><a href="#cb50-11" aria-hidden="true" tabindex="-1"></a>      roll <span class="ot">=</span> listToFullRoll <span class="op">$</span> [<span class="fu">read</span> w <span class="op">|</span> w <span class="ot">&lt;-</span> rollWords]</span>
+<span id="cb50-12"><a href="#cb50-12" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> <span class="dt">YState</span> { card <span class="ot">=</span> sc, uptotal <span class="ot">=</span> ut, bonus <span class="ot">=</span> b, turn <span class="ot">=</span> <span class="dt">YTurn</span> { rerolls <span class="ot">=</span> rr, roll <span class="ot">=</span> roll } }</span></code></pre></div>
+<h1 id="appendix-various-scoring-functions">Appendix: Various Scoring Functions</h1>
+<p>I relegated all of the various functions for scoring a dice roll to the end.
+They were easy to write, but not particularly interesting.</p>
+<p>If the Yahtzee bonus is active, a Yahtzee roll gets an extra 100 points no matter what category it is scored in.</p>
+<div class="sourceCode" id="cb51"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb51-1"><a href="#cb51-1" aria-hidden="true" tabindex="-1"></a><span class="ot">scoreRollWithBonus ::</span> <span class="dt">YBonus</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">Int</span></span>
+<span id="cb51-2"><a href="#cb51-2" aria-hidden="true" tabindex="-1"></a>scoreRollWithBonus <span class="dt">True</span> roll cat <span class="ot">=</span></span>
+<span id="cb51-3"><a href="#cb51-3" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> bonus <span class="ot">=</span> <span class="kw">if</span> (isYahtzee roll) <span class="kw">then</span> <span class="dv">100</span> <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb51-4"><a href="#cb51-4" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> bonus <span class="op">+</span> scoreRoll roll cat</span>
+<span id="cb51-5"><a href="#cb51-5" aria-hidden="true" tabindex="-1"></a>scoreRollWithBonus <span class="dt">False</span> roll cat <span class="ot">=</span> scoreRoll roll cat</span></code></pre></div>
+<p>Our score roll function is dumb but simple—just pattern matching on each possible category.</p>
+<div class="sourceCode" id="cb52"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb52-1"><a href="#cb52-1" aria-hidden="true" tabindex="-1"></a><span class="ot">scoreRoll ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Category</span> <span class="ot">-&gt;</span> <span class="dt">Int</span></span>
+<span id="cb52-2"><a href="#cb52-2" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Ones</span> <span class="ot">=</span> occur <span class="dv">1</span> dice</span>
+<span id="cb52-3"><a href="#cb52-3" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Twos</span> <span class="ot">=</span> (occur <span class="dv">2</span> dice) <span class="op">*</span> <span class="dv">2</span></span>
+<span id="cb52-4"><a href="#cb52-4" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Threes</span> <span class="ot">=</span> (occur <span class="dv">3</span> dice) <span class="op">*</span> <span class="dv">3</span></span>
+<span id="cb52-5"><a href="#cb52-5" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Fours</span> <span class="ot">=</span> (occur <span class="dv">4</span> dice) <span class="op">*</span> <span class="dv">4</span></span>
+<span id="cb52-6"><a href="#cb52-6" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Fives</span> <span class="ot">=</span> (occur <span class="dv">5</span> dice) <span class="op">*</span> <span class="dv">5</span></span>
+<span id="cb52-7"><a href="#cb52-7" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Sixes</span> <span class="ot">=</span> (occur <span class="dv">6</span> dice) <span class="op">*</span> <span class="dv">6</span></span>
+<span id="cb52-8"><a href="#cb52-8" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">ThreeKind</span> <span class="ot">=</span> <span class="kw">if</span> atLeastNTimes <span class="dv">3</span> dice <span class="kw">then</span> (sumRoll dice) <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-9"><a href="#cb52-9" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">FourKind</span> <span class="ot">=</span> <span class="kw">if</span> atLeastNTimes <span class="dv">4</span> dice <span class="kw">then</span> (sumRoll dice) <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-10"><a href="#cb52-10" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">FullHouse</span> <span class="ot">=</span> <span class="kw">if</span> isFullHouse dice <span class="kw">then</span> <span class="dv">25</span> <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-11"><a href="#cb52-11" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">SmStraight</span> <span class="ot">=</span> <span class="kw">if</span> isSmStraight dice <span class="kw">then</span> <span class="dv">30</span> <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-12"><a href="#cb52-12" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">LgStraight</span> <span class="ot">=</span> <span class="kw">if</span> isLgStraight dice <span class="kw">then</span> <span class="dv">40</span> <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-13"><a href="#cb52-13" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Yahtzee</span> <span class="ot">=</span> <span class="kw">if</span> isYahtzee dice <span class="kw">then</span> <span class="dv">50</span> <span class="kw">else</span> <span class="dv">0</span></span>
+<span id="cb52-14"><a href="#cb52-14" aria-hidden="true" tabindex="-1"></a>scoreRoll dice <span class="dt">Chance</span> <span class="ot">=</span> sumRoll dice</span>
+<span id="cb52-15"><a href="#cb52-15" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb52-16"><a href="#cb52-16" aria-hidden="true" tabindex="-1"></a><span class="ot">atLeastNTimes ::</span> <span class="dt">Int</span> <span class="ot">-&gt;</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb52-17"><a href="#cb52-17" aria-hidden="true" tabindex="-1"></a>atLeastNTimes n roll <span class="ot">=</span> <span class="fu">any</span> (\i <span class="ot">-&gt;</span> occur i roll <span class="op">&gt;=</span> n) [<span class="dv">1</span><span class="op">..</span><span class="dv">6</span>]</span>
+<span id="cb52-18"><a href="#cb52-18" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb52-19"><a href="#cb52-19" aria-hidden="true" tabindex="-1"></a><span class="ot">isFullHouse ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb52-20"><a href="#cb52-20" aria-hidden="true" tabindex="-1"></a>isFullHouse dice <span class="ot">=</span></span>
+<span id="cb52-21"><a href="#cb52-21" aria-hidden="true" tabindex="-1"></a>  <span class="kw">let</span> distinctDice <span class="ot">=</span> distinctFaces dice</span>
+<span id="cb52-22"><a href="#cb52-22" aria-hidden="true" tabindex="-1"></a>      diceOccur k <span class="ot">=</span> occur k dice</span>
+<span id="cb52-23"><a href="#cb52-23" aria-hidden="true" tabindex="-1"></a>      occurList <span class="ot">=</span> <span class="fu">sort</span> <span class="op">$</span> <span class="fu">map</span> diceOccur distinctDice</span>
+<span id="cb52-24"><a href="#cb52-24" aria-hidden="true" tabindex="-1"></a>   <span class="kw">in</span> occurList <span class="op">==</span> [<span class="dv">2</span>, <span class="dv">3</span>]</span>
+<span id="cb52-25"><a href="#cb52-25" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb52-26"><a href="#cb52-26" aria-hidden="true" tabindex="-1"></a><span class="ot">isSmStraight ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb52-27"><a href="#cb52-27" aria-hidden="true" tabindex="-1"></a>isSmStraight dice <span class="ot">=</span></span>
+<span id="cb52-28"><a href="#cb52-28" aria-hidden="true" tabindex="-1"></a>  <span class="fu">any</span> isConsecutive (windows uniqDice)</span></code></pre></div>
+<p>The small straight detection is mildly complicated by needing to check if either “window” of dice contains four consecutive dice.</p>
+<div class="sourceCode" id="cb53"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb53-1"><a href="#cb53-1" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb53-2"><a href="#cb53-2" aria-hidden="true" tabindex="-1"></a>    uniqDice <span class="ot">=</span> <span class="fu">sort</span> <span class="op">$</span> distinctFaces dice</span>
+<span id="cb53-3"><a href="#cb53-3" aria-hidden="true" tabindex="-1"></a>    isConsecutive [a, b, c, d] <span class="ot">=</span> a <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> b <span class="op">&amp;&amp;</span> b <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> c <span class="op">&amp;&amp;</span> c <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> d</span>
+<span id="cb53-4"><a href="#cb53-4" aria-hidden="true" tabindex="-1"></a>    isConsecutive _ <span class="ot">=</span> <span class="dt">False</span></span>
+<span id="cb53-5"><a href="#cb53-5" aria-hidden="true" tabindex="-1"></a>    windows xs <span class="op">|</span> <span class="fu">length</span> xs <span class="op">&lt;</span> <span class="dv">4</span> <span class="ot">=</span> [] <span class="op">|</span> <span class="fu">otherwise</span> <span class="ot">=</span> <span class="fu">take</span> <span class="dv">4</span> xs <span class="op">:</span> windows (<span class="fu">drop</span> <span class="dv">1</span> xs)</span>
+<span id="cb53-6"><a href="#cb53-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb53-7"><a href="#cb53-7" aria-hidden="true" tabindex="-1"></a><span class="ot">isLgStraight ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb53-8"><a href="#cb53-8" aria-hidden="true" tabindex="-1"></a>isLgStraight dice <span class="ot">=</span></span>
+<span id="cb53-9"><a href="#cb53-9" aria-hidden="true" tabindex="-1"></a>  isConsecutive uniqDice</span>
+<span id="cb53-10"><a href="#cb53-10" aria-hidden="true" tabindex="-1"></a>  <span class="kw">where</span></span>
+<span id="cb53-11"><a href="#cb53-11" aria-hidden="true" tabindex="-1"></a>    uniqDice <span class="ot">=</span> <span class="fu">sort</span> <span class="op">$</span> distinctFaces dice</span></code></pre></div>
+<p>This version of the <code>isConsecutive</code> function only handles five dice because a large straight must use all five dice.</p>
+<div class="sourceCode" id="cb54"><pre class="sourceCode haskell literate"><code class="sourceCode haskell"><span id="cb54-1"><a href="#cb54-1" aria-hidden="true" tabindex="-1"></a>    isConsecutive [a, b, c, d, e] <span class="ot">=</span> a <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> b <span class="op">&amp;&amp;</span> b <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> c <span class="op">&amp;&amp;</span> c <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> d <span class="op">&amp;&amp;</span> d <span class="op">+</span> <span class="dv">1</span> <span class="op">==</span> e</span>
+<span id="cb54-2"><a href="#cb54-2" aria-hidden="true" tabindex="-1"></a>    isConsecutive _ <span class="ot">=</span> <span class="dt">False</span></span>
+<span id="cb54-3"><a href="#cb54-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb54-4"><a href="#cb54-4" aria-hidden="true" tabindex="-1"></a><span class="ot">isYahtzee ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Bool</span></span>
+<span id="cb54-5"><a href="#cb54-5" aria-hidden="true" tabindex="-1"></a>isYahtzee dice <span class="ot">=</span> <span class="fu">length</span> (distinctFaces dice) <span class="op">==</span> <span class="dv">1</span></span>
+<span id="cb54-6"><a href="#cb54-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb54-7"><a href="#cb54-7" aria-hidden="true" tabindex="-1"></a><span class="ot">sumRoll ::</span> <span class="dt">Roll</span> <span class="ot">-&gt;</span> <span class="dt">Int</span></span>
+<span id="cb54-8"><a href="#cb54-8" aria-hidden="true" tabindex="-1"></a>sumRoll roll <span class="ot">=</span> <span class="fu">sum</span> [i <span class="op">*</span> occur i roll <span class="op">|</span> i <span class="ot">&lt;-</span> [<span class="dv">1</span><span class="op">..</span><span class="dv">6</span>]]</span></code></pre></div>
+    </section>
+</article>
+
+        </main>
+    </body>
+</html>
